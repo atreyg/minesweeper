@@ -10,18 +10,20 @@
 #include <unistd.h>
 #include <errno.h>
 
-int setup_server_connection(char *port_no);
-void authenticate_access(int new_fd);
+
+#define MAX_READ_LENGTH 20
+#define BACKLOG 10
 
 typedef struct logins
 {
-    char *username;
-    char *password;
+    char username[MAX_READ_LENGTH];
+    char password[MAX_READ_LENGTH];
     struct logins *next;
 } logins;
 
-#define BACKLOG 10
-#define MAX_READ_LENGTH 20
+int setup_server_connection(char *port_no);
+void authenticate_access(int new_fd, logins* access_list);
+int check_details(logins* head, char* usr, char* pwd);
 
 int main(int argc, char *argv[])
 {
@@ -31,23 +33,34 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    //Read file
-    logins *head = NULL;
-    head = malloc(sizeof(logins));
-    if (head == NULL)
+
+    FILE *login_file = fopen("Authentication.txt", "r");
+    if (!login_file)
     {
         exit(1);
     }
 
-    FILE *login_file = fopen("Authentication.txt", "r");
-    if (login_file)
-    {
+    logins *head = NULL;
+    logins* prev = head;
+    while(1){
+        logins* curr_node = malloc(sizeof(logins));
+        
+        if(fscanf(login_file, "%s %s", curr_node->username, curr_node->password) != 2){
+            free(curr_node);
+            break;
+        };
+        
+        if(head == NULL){
+            head = curr_node;
+        }else{
+            prev->next = curr_node;
+        }
 
-        fscanf(login_file, "%s", head->username);
-        fscanf(login_file, "%s", head->password);
-    }
-    printf("%s\n", head->username);
-    printf("%s\n", head->password);
+        prev = curr_node;
+    } 
+    //Throwing away the first entry
+    head = head->next;
+
     fclose(login_file);
 
     int sockfd = setup_server_connection(argv[1]);
@@ -68,7 +81,7 @@ int main(int argc, char *argv[])
         //        inet_ntoa(their_addr.sin_addr));
         if (!fork())
         { /* this is the child process */
-            authenticate_access(new_fd);
+            authenticate_access(new_fd, head);
 
             close(new_fd);
             exit(0);
@@ -80,7 +93,19 @@ int main(int argc, char *argv[])
     }
 }
 
-void authenticate_access(int new_fd)
+int check_details(logins* head, char* usr, char* pwd){
+    logins* curr_node = head;
+    while(curr_node->next != NULL){
+        if(strcmp(curr_node->username, usr) == 0 && strcmp(curr_node->password, pwd) == 0){
+            return 1;
+        }
+        printf("Username: %s, Password: %s\n", curr_node->username, curr_node->password);
+        curr_node = curr_node->next;
+    }
+    return 0;
+}
+
+void authenticate_access(int new_fd, logins* access_list)
 {
     char usr[MAX_READ_LENGTH];
     char pwd[MAX_READ_LENGTH];
@@ -95,11 +120,12 @@ void authenticate_access(int new_fd)
 
     printf("Username: %s\nPassword: %s\n", usr, pwd);
 
-    int auth_val = 1;
+    int auth_val = check_details(access_list, usr, pwd);
     if (send(new_fd, &auth_val, sizeof(auth_val), 0) == -1)
     {
         perror("Couldn't send authorisation.");
     }
+
 
     printf("Send data\n");
     //Loop to block so connection does not close

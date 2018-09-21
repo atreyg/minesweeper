@@ -128,5 +128,7 @@ char *read_line(char *buffer)
         int c;
         while ((c = getchar()) != '\n' && c != EOF)
             ;
+    } else {
+        buffer[strlen(buffer) - 1] = '\0';
     }
 }
