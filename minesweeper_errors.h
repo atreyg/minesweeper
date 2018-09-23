@@ -1,0 +1,6 @@
+#define NORMAL 1
+#define GAME_LOST 2
+#define GAME_WON 3
+#define NO_MINE_AT_FLAG 4
+#define TILE_ALREADY_REVEALED 5
+#define INVALID_COORDINATES 6
