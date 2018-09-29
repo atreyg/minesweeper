@@ -8,17 +8,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "minesweeper_errors.h"
 #include "minesweeper_logic.h"
 
-int setup_client_connection(char *host_arg, char *port_arg);
-int login(int sockfd);
-void read_line(char *buffer);
-int select_game_option(int sockfd);
+#include "common_constants.h"
 
-#define MAXDATASIZE 100 /* max number of bytes we can get at once */
-#define MAX_READ_LENGTH 20
-#define ARRAY_SIZE 30
+#include "client.h"
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -32,73 +26,97 @@ int main(int argc, char *argv[]) {
     if (!success) {
         printf(
             "You entered either an incorrect username or password. "
-            "Disconnecting.");
+            "Disconnecting.\n");
         close(sockfd);
         return 0;
     }
 
-    int selection = select_game_option(sockfd);
+    int selection = select_client_action(sockfd);
 
     if (selection == 1) {
-        // play game
-        GameState *game = malloc(sizeof(GameState));
-        char option;
-        while (1) {
-            printf("Select an option:\n");
-            printf("<R> Reveal tile:\n");
-            printf("<P> Place flag:\n");
-            printf("<Q> Quit Game:\n");
-            printf("\nOption (R,P,Q): ");
-            do {
-                scanf("%c", &option);
-            } while (option != 'R' && option != 'P' && option != 'Q');
-
-            send(sockfd, &option, sizeof(option), 0);
-
-            if (option == 'Q') {
-                break;
-            }
-
-            char row;
-            int column;
-            printf("Please input a coordinate: ");
-            scanf(" %c%d", &row, &column);
-
-            send(sockfd, &row, sizeof(row), 0);
-            send(sockfd, &column, sizeof(column), 0);
-
-            int response;
-            recv(sockfd, &response, sizeof(response), 0);
-            recv(sockfd, game, sizeof(GameState), 0);
-            print_game_state(game);
-
-            if (response == NORMAL) {
-            } else if (response == GAME_LOST) {
-                printf("You lost!\n");
-                break;
-            } else if (response == GAME_WON) {
-                printf("You won!\n");
-                break;
-            } else if (response == NO_MINE_AT_FLAG) {
-                printf("There was no mine at flag!\n");
-            } else if (response == TILE_ALREADY_REVEALED) {
-                printf("The tile was already revealed!\n");
-            } else if (response == INVALID_COORDINATES) {
-                printf(
-                    "The coordinates entered are invalid. Ensure they are "
-                    "within the game bounds!\n");
-            }
-        };
-        free(game);
+        play_minesweeper(sockfd);
     } else if (selection == 2) {
-        // show leaderboard
+        show_leaderboard();
     }
 
     close(sockfd);
     return 0;
 }
 
-int select_game_option(int sockfd) {
+void play_minesweeper(int sockfd) {
+    GameState *game = malloc(sizeof(GameState));
+    update_game_state(game, sockfd);
+    while (1) {
+        char option = select_game_action();
+        send(sockfd, &option, sizeof(option), 0);
+
+        if (option == 'Q') {
+            break;
+        }
+
+        get_and_send_tile_coordinates(sockfd);
+
+        int response;
+        recv(sockfd, &response, sizeof(response), 0);
+
+        update_game_state(game, sockfd);
+        print_response_output(response);
+
+        if (response == GAME_LOST || response == GAME_WON) {
+            break;
+        }
+    };
+    free(game);
+}
+
+void show_leaderboard() {}
+
+void print_response_output(int response) {
+    if (response == NORMAL) {
+    } else if (response == GAME_LOST) {
+        printf("You lost!\n");
+    } else if (response == GAME_WON) {
+        printf("You won!\n");
+    } else if (response == NO_MINE_AT_FLAG) {
+        printf("There was no mine at flag!\n");
+    } else if (response == TILE_ALREADY_REVEALED) {
+        printf("The tile was already revealed!\n");
+    } else if (response == INVALID_COORDINATES) {
+        printf(
+            "The coordinates entered are invalid. Ensure they are "
+            "within the game bounds!\n");
+    }
+}
+
+void update_game_state(GameState *game, int sockfd) {
+    recv(sockfd, game, sizeof(GameState), 0);
+    print_game_state(game);
+}
+
+void get_and_send_tile_coordinates(int sockfd) {
+    char row;
+    int column;
+    printf("Please input a coordinate: ");
+    scanf(" %c%d", &row, &column);
+
+    send(sockfd, &row, sizeof(row), 0);
+    send(sockfd, &column, sizeof(column), 0);
+}
+
+char select_game_action() {
+    char option;
+    printf("Select an option:\n");
+    printf("<R> Reveal tile:\n");
+    printf("<P> Place flag:\n");
+    printf("<Q> Quit Game:\n");
+    printf("\nOption (R,P,Q): ");
+    do {
+        scanf("%c", &option);
+    } while (option != 'R' && option != 'P' && option != 'Q');
+    return option;
+}
+
+int select_client_action(int sockfd) {
     printf("Welcome to the Minesweeper gaming system.\n");
     printf("\nPlease enter a selection:\n");
     printf("<1> Play Minesweeper\n");

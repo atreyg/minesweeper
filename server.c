@@ -9,21 +9,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "common_constants.h"
+#include "server.h"
+
+#include "highscore_logic.c"
 #include "minesweeper_logic.h"
-
-#define MAX_READ_LENGTH 20
-#define BACKLOG 10
-
-typedef struct logins {
-    char username[MAX_READ_LENGTH];
-    char password[MAX_READ_LENGTH];
-    struct logins *next;
-} logins;
-
-int setup_server_connection(char *port_no);
-void authenticate_access(int new_fd, logins *access_list);
-int check_details(logins *head, char *usr, char *pwd);
-void play_minesweeper(int new_fd);
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -31,13 +21,97 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
+    int new_fd;
+    struct sockaddr_in their_addr; /* connector's address information */
+    socklen_t sin_size;
+    int sockfd = setup_server_connection(argv[1]);
+
+    logins *head = NULL;
+    setup_login_information(&head);
+
+    Score *best = NULL;
+
+    while (1) { /* main accept() loop */
+        sin_size = sizeof(struct sockaddr_in);
+        if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
+                             &sin_size)) == -1) {
+            perror("accept");
+            continue;
+        }
+
+        if (!fork()) {
+            printf("created child for new game\n");
+
+            logins *current_login = authenticate_access(new_fd, head);
+
+            if (current_login != NULL) {
+                int selection;
+                if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
+                    perror("Couldn't receive client selection.");
+                }
+
+                if (selection == 1) {
+                    current_login->games_played++;
+                    Score *score = malloc(sizeof(Score));
+                    score->user = current_login;
+                    long int start, end;
+
+                    time(&start);
+                    play_minesweeper(new_fd, current_login);
+                    time(&end);
+
+                    score->duration = end - start;
+                    insert_score(&best, score);
+                } else if (selection == 2) {
+                    // return highscore data
+                    // probably a struct like the game state that gets passed
+                    // back to client to render
+                }
+            }
+
+            // Quitting game
+            printf("Closing connection and exiting child process\n");
+            close(new_fd);
+            exit(0);
+        }
+        close(new_fd); /* parent doesn't need this */
+
+        /* clean up child processes */
+        while (waitpid(-1, NULL, WNOHANG) > 0)
+            ;
+    }
+}
+
+void insert_score(Score **head, Score *new) {
+    Score *node = *head;
+    Score *prev;
+
+    if (node == NULL) {
+        node = new;
+        return;
+    }
+
+    while (1) {
+        if (node->duration > new->duration ||
+            (node->duration == new->duration &&
+             node->user->games_won < new->user->games_won)) {
+            prev = node;
+            node = node->next;
+        } else {
+            prev->next = new;
+            new->next = node;
+            return;
+        }
+    }
+}
+
+void setup_login_information(logins **head_address) {
     FILE *login_file = fopen("Authentication.txt", "r");
     if (!login_file) {
         exit(1);
     }
 
-    logins *head = NULL;
-    logins *prev = head;
+    logins *prev = *head_address;
     while (1) {
         logins *curr_node = malloc(sizeof(logins));
 
@@ -47,63 +121,26 @@ int main(int argc, char *argv[]) {
             break;
         };
 
-        if (head == NULL) {
-            head = curr_node;
+        curr_node->games_played = 0;
+        curr_node->games_won = 0;
+
+        if (*head_address == NULL) {
+            *head_address = curr_node;
         } else {
             prev->next = curr_node;
         }
-
         prev = curr_node;
     }
-    // Throwing away the first entry
-    head = head->next;
-
     fclose(login_file);
-
-    int sockfd = setup_server_connection(argv[1]);
-    int new_fd;
-    struct sockaddr_in their_addr; /* connector's address information */
-    socklen_t sin_size;
-
-    while (1) { /* main accept() loop */
-        sin_size = sizeof(struct sockaddr_in);
-        if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
-                             &sin_size)) == -1) {
-            perror("accept");
-            continue;
-        }
-        // printf("server: got connection from %s\n",
-        //        inet_ntoa(their_addr.sin_addr));
-        if (!fork()) { /* this is the child process */
-            printf("created child for new game\n");
-            authenticate_access(new_fd, head);
-            int selection;
-            if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
-                perror("Couldn't receive username.");
-            }
-
-            if (selection == 1) {
-                play_minesweeper(new_fd);
-            } else if (selection == 2) {
-                // return highscore data
-                // probably a struct like the game state that gets passed back
-                // to client to render
-            }
-
-            printf("Closing connection and exiting child process\n");
-            close(new_fd);
-            exit(0);
-        }
-        close(new_fd); /* parent doesn't need this */
-
-        while (waitpid(-1, NULL, WNOHANG) > 0)
-            ; /* clean up child processes */
-    }
+    // Throwing away the first entry that contains headers from file
+    *head_address = (*head_address)->next;
 }
 
-void play_minesweeper(int new_fd) {
+void play_minesweeper(int new_fd, logins *current_login) {
     GameState *game = malloc(sizeof(GameState));
     initialise_game(game);
+    send(new_fd, game, sizeof(GameState), 0);
+
     char row, option;
     int column;
     do {
@@ -122,6 +159,10 @@ void play_minesweeper(int new_fd) {
             response = place_flag(game, row - 'A', column - 1);
         }
 
+        if (response == GAME_WON) {
+            current_login->games_won++;
+        }
+
         send(new_fd, &response, sizeof(response), 0);
         send(new_fd, game, sizeof(GameState), 0);
 
@@ -129,19 +170,19 @@ void play_minesweeper(int new_fd) {
     free(game);
 }
 
-int check_details(logins *head, char *usr, char *pwd) {
+logins *check_details(logins *head, char *usr, char *pwd) {
     logins *curr_node = head;
     while (curr_node->next != NULL) {
         if (strcmp(curr_node->username, usr) == 0 &&
             strcmp(curr_node->password, pwd) == 0) {
-            return 1;
+            return curr_node;
         }
         curr_node = curr_node->next;
     }
-    return 0;
+    return NULL;
 }
 
-void authenticate_access(int new_fd, logins *access_list) {
+logins *authenticate_access(int new_fd, logins *access_list) {
     char usr[MAX_READ_LENGTH];
     char pwd[MAX_READ_LENGTH];
     if (recv(new_fd, usr, MAX_READ_LENGTH, 0) == -1) {
@@ -151,10 +192,17 @@ void authenticate_access(int new_fd, logins *access_list) {
         perror("Couldn't receive password.");
     };
 
-    int auth_val = check_details(access_list, usr, pwd);
+    logins *auth_login = check_details(access_list, usr, pwd);
+    int auth_val;
+    if (auth_login == NULL) {
+        auth_val = 0;
+    } else {
+        auth_val = 1;
+    }
     if (send(new_fd, &auth_val, sizeof(auth_val), 0) == -1) {
         perror("Couldn't send authorisation.");
     }
+    return auth_login;
 }
 
 int setup_server_connection(char *port_arg) {

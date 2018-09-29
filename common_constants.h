@@ -1,3 +1,6 @@
+#define MAX_READ_LENGTH 20
+#define BACKLOG 10
+
 #define NORMAL 1
 #define GAME_LOST 2
 #define GAME_WON 3

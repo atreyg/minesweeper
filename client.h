@@ -1,0 +1,10 @@
+int setup_client_connection(char *host_arg, char *port_arg);
+int login(int sockfd);
+void read_line(char *buffer);
+int select_client_action(int sockfd);
+void play_minesweeper(int sockfd);
+void show_leaderboard();
+char select_game_action();
+void get_and_send_tile_coordinates(int sockfd);
+void update_game_state(GameState *game, int sockfd);
+void print_response_output(int response);

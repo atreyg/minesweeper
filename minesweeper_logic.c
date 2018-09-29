@@ -1,5 +1,5 @@
 #include "minesweeper_logic.h"
-#include "minesweeper_errors.h"
+#include "common_constants.h"
 
 void initialise_game(GameState *game) {
     game->mines_left = NUM_MINES;
@@ -68,26 +68,22 @@ int place_flag(GameState *game, int row, int column) {
             tile->flagged = true;
             game->mines_left--;
 
-            if (game->mines_left == 0) {
-                game->gameOver = true;
-                return GAME_WON;
-            }
+            return check_winning_condition(game);
         } else {
             return NO_MINE_AT_FLAG;
         }
-
-        return NORMAL;
     }
 
     return INVALID_COORDINATES;
 }
 
-/*void check_winning_condition(GameState *game) {
-  if (game->mines_left == 0) {
-    game->gameOver = true;
-    printf("CONGRATS YOU WON!!!!");
-  }
-}*/
+int check_winning_condition(GameState *game) {
+    if (game->mines_left == 0) {
+        game->gameOver = true;
+        return GAME_WON;
+    }
+    return NORMAL;
+}
 
 int search_tiles(GameState *game, int row, int column) {
     if (row >= 0 && column >= 0 && row < NUM_TILES_Y && column < NUM_TILES_X) {
@@ -97,9 +93,7 @@ int search_tiles(GameState *game, int row, int column) {
             return TILE_ALREADY_REVEALED;
         } else if (tile->is_mine) {
             tile->revealed = true;
-            print_game_state(game);
-            game->gameOver = true;
-            return GAME_LOST;
+            return game_over(game);
         } else {
             reveal_tile(game, row, column);
         }
@@ -108,10 +102,11 @@ int search_tiles(GameState *game, int row, int column) {
     return INVALID_COORDINATES;
 }
 
-/*void game_over(GameState *game) {
-  game->gameOver = true;
-  printf("YOU LOSE!");
-}*/
+int game_over(GameState *game) {
+    print_game_state(game);
+    game->gameOver = true;
+    return GAME_LOST;
+}
 
 void print_game_state(GameState *game) {
     printf("\n    ");
