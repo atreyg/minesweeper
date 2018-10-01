@@ -8,3 +8,4 @@ char select_game_action();
 void get_and_send_tile_coordinates(int sockfd);
 void update_game_state(GameState *game, int sockfd);
 void print_response_output(int response);
+void core_loop(int sockfd);

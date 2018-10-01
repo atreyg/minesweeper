@@ -7,12 +7,13 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "common_constants.h"
+#include "highscore_logic.c"
 #include "server.h"
 
-#include "highscore_logic.c"
 #include "minesweeper_logic.h"
 
 int main(int argc, char *argv[]) {
@@ -45,27 +46,33 @@ int main(int argc, char *argv[]) {
             logins *current_login = authenticate_access(new_fd, head);
 
             if (current_login != NULL) {
-                int selection;
-                if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
-                    perror("Couldn't receive client selection.");
-                }
+                while (1) {
+                    int selection;
+                    if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
+                        perror("Couldn't receive client selection.");
+                    }
 
-                if (selection == 1) {
-                    current_login->games_played++;
-                    Score *score = malloc(sizeof(Score));
-                    score->user = current_login;
-                    long int start, end;
+                    if (selection == 1) {
+                        long int start, end;
+                        time(&start);
+                        int game_result = play_minesweeper(new_fd);
+                        time(&end);
+                        current_login->games_played++;
 
-                    time(&start);
-                    play_minesweeper(new_fd, current_login);
-                    time(&end);
+                        if (game_result == GAME_WON) {
+                            current_login->games_won++;
 
-                    score->duration = end - start;
-                    insert_score(&best, score);
-                } else if (selection == 2) {
-                    // return highscore data
-                    // probably a struct like the game state that gets passed
-                    // back to client to render
+                            Score *score = malloc(sizeof(Score));
+                            score->user = current_login;
+                            score->duration = end - start;
+
+                            insert_score(&best, score);
+                        }
+                    } else if (selection == 2) {
+                        send_highscore_data(best, new_fd);
+                    } else if (selection == 3) {
+                        break;
+                    }
                 }
             }
 
@@ -82,26 +89,55 @@ int main(int argc, char *argv[]) {
     }
 }
 
-void insert_score(Score **head, Score *new) {
-    Score *node = *head;
-    Score *prev;
-
+void send_highscore_data(Score *head, int new_fd) {
+    Score *node = head;
+    int response_type;
     if (node == NULL) {
-        node = new;
-        return;
+        response_type = HIGHSCORES_EMPTY;
+    } else {
+        response_type = HIGHSCORES_PRESENT;
     }
 
-    while (1) {
-        if (node->duration > new->duration ||
-            (node->duration == new->duration &&
-             node->user->games_won < new->user->games_won)) {
-            prev = node;
-            node = node->next;
+    send(new_fd, &response_type, sizeof(response_type), 0);
+
+    while (node != NULL) {
+        send(new_fd, node->user->username, sizeof(node->user->username), 0);
+        send(new_fd, &(node->duration), sizeof(node->duration), 0);
+        send(new_fd, &(node->user->games_played),
+             sizeof(node->user->games_played), 0);
+        send(new_fd, &(node->user->games_won), sizeof(node->user->games_won),
+             0);
+
+        int entries_left;
+        if (node->next == NULL) {
+            entries_left = HIGHSCORES_END;
         } else {
-            prev->next = new;
+            entries_left = HIGHSCORES_PRESENT;
+        }
+        send(new_fd, &entries_left, sizeof(entries_left), 0);
+
+        node = node->next;
+    }
+}
+
+void insert_score(Score **head, Score *new) {
+    Score *prev = NULL;
+    Score *node = *head;
+    while (1) {
+        if (node == NULL || new->duration > node->duration ||
+            (new->duration == node->duration &&
+             new->user->games_won < node->user->games_won)) {
+            if (prev == NULL) {
+                *head = new;
+            } else {
+                prev->next = new;
+            }
             new->next = node;
             return;
         }
+
+        prev = node;
+        node = node->next;
     }
 }
 
@@ -136,7 +172,7 @@ void setup_login_information(logins **head_address) {
     *head_address = (*head_address)->next;
 }
 
-void play_minesweeper(int new_fd, logins *current_login) {
+int play_minesweeper(int new_fd) {
     GameState *game = malloc(sizeof(GameState));
     initialise_game(game);
     send(new_fd, game, sizeof(GameState), 0);
@@ -159,15 +195,16 @@ void play_minesweeper(int new_fd, logins *current_login) {
             response = place_flag(game, row - 'A', column - 1);
         }
 
-        if (response == GAME_WON) {
-            current_login->games_won++;
-        }
-
         send(new_fd, &response, sizeof(response), 0);
         send(new_fd, game, sizeof(GameState), 0);
 
+        if (response == GAME_WON) {
+            free(game);
+            return GAME_WON;
+        }
     } while (!game->gameOver);
     free(game);
+    return 1;
 }
 
 logins *check_details(logins *head, char *usr, char *pwd) {

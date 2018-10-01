@@ -14,6 +14,9 @@
 
 #include "client.h"
 
+// Win string:
+// PA1PA2PA3PA4PA5PA6PA7PA8PA9PB1PB2PB3PB4PB5PB6PB7PB8PB9PC1PC2PC3PC4PC5PC6PC7PC8PC9PD1PD2PD3PD4PD5PD6PD7PD8PD9PE1PE2PE3PE4PE5PE6PE7PE8PE9PF1PF2PF3PF4PF5PF6PF7PF8PF9PG1PG2PG3PG4PG5PG6PG7PG8PG9PH1PH2PH3PH4PH5PH6PH7PH8PH9PI1PI2PI3PI4PI5PI6PI7PI8PI9
+
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         fprintf(stderr, "usage: client_hostname port_number\n");
@@ -31,16 +34,24 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    int selection = select_client_action(sockfd);
-
-    if (selection == 1) {
-        play_minesweeper(sockfd);
-    } else if (selection == 2) {
-        show_leaderboard();
-    }
+    core_loop(sockfd);
 
     close(sockfd);
     return 0;
+}
+
+void core_loop(int sockfd) {
+    while (1) {
+        int selection = select_client_action(sockfd);
+
+        if (selection == 1) {
+            play_minesweeper(sockfd);
+        } else if (selection == 2) {
+            show_leaderboard(sockfd);
+        } else if (selection == 3) {
+            break;
+        }
+    }
 }
 
 void play_minesweeper(int sockfd) {
@@ -69,7 +80,45 @@ void play_minesweeper(int sockfd) {
     free(game);
 }
 
-void show_leaderboard() {}
+void show_leaderboard(int sockfd) {
+    int response;
+    recv(sockfd, &response, sizeof(response), 0);
+
+    char border[50];
+    for (int i = 0; i < 14; i++) {
+        border[i] = '=';
+    }
+    border[49] = '\0';
+    printf("\n%s\n", border);
+    if (response == HIGHSCORES_EMPTY) {
+        printf(
+            "\nThere is no information currently stored in the leaderboard. "
+            "Try again later.\n");
+    } else {
+        while (1) {
+            char username[MAX_READ_LENGTH];
+            long int duration;
+            int games_won;
+            int games_played;
+
+            recv(sockfd, username, sizeof(username), 0);
+            recv(sockfd, &duration, sizeof(duration), 0);
+            recv(sockfd, &games_won, sizeof(games_won), 0);
+            recv(sockfd, &games_played, sizeof(games_played), 0);
+
+            printf("%s \t %ld seconds \t %d games won, %d games played\n",
+                   username, duration, games_won, games_played);
+
+            int entry_left;
+            recv(sockfd, &entry_left, sizeof(entry_left), 0);
+
+            if (entry_left == HIGHSCORES_END) {
+                break;
+            }
+        }
+    }
+    printf("\n%s\n", border);
+}
 
 void print_response_output(int response) {
     if (response == NORMAL) {
@@ -106,12 +155,12 @@ void get_and_send_tile_coordinates(int sockfd) {
 char select_game_action() {
     char option;
     printf("Select an option:\n");
-    printf("<R> Reveal tile:\n");
-    printf("<P> Place flag:\n");
-    printf("<Q> Quit Game:\n");
-    printf("\nOption (R,P,Q): ");
+    printf("<R> Reveal tile\n");
+    printf("<P> Place flag\n");
+    printf("<Q> Quit Game\n");
     do {
-        scanf("%c", &option);
+        printf("\nOption (R,P,Q): ");
+        scanf(" %c", &option);
     } while (option != 'R' && option != 'P' && option != 'Q');
     return option;
 }
