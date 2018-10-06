@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -9,6 +10,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 #include "common_constants.h"
 #include "highscore_logic.c"
@@ -16,22 +19,76 @@
 
 #include "minesweeper_logic.h"
 
+void add_request(int new_fd,
+            pthread_mutex_t* p_mutex,
+            pthread_cond_t*  p_cond_var);
+struct request* get_request(pthread_mutex_t* p_mutex);
+void handle_request(struct request* a_request, int thread_id);
+void* handle_requests_loop(void* data);
+
+
+/* number of threads used to service requests */
+#define NUM_HANDLER_THREADS 3
+
+/* global mutex for our program. assignment initializes it. */
+/* note that we use a RECURSIVE mutex, since a handler      */
+/* thread might try to lock it twice consecutively.         */
+pthread_mutex_t request_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+
+/* global condition variable for our program. assignment initializes it. */
+pthread_cond_t  got_request = PTHREAD_COND_INITIALIZER;
+
+pthread_mutex_t r_mutex, w_mutex;
+
+sem_t mutex;
+
+//used for synchronisation with highscores
+int rdcount = 0;
+
+int num_requests = 0;   /* number of pending requests, initially none */
+
+Score *best = NULL;
+
+logins *head = NULL;
+
+/* format of a single request. */
+struct request {
+    int new_fd;
+    struct request* next;   /* pointer to next request, NULL if none. */
+};
+
+struct request* requests = NULL;     /* head of linked list of requests. */
+struct request* last_request = NULL; /* pointer to last request.         */
+
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "usage: server port_number\n");
         exit(1);
     }
 
-    int new_fd;
+    int        i;                                /* loop counter          */
+    int        thr_id[NUM_HANDLER_THREADS];      /* thread IDs            */
+    pthread_t  p_threads[NUM_HANDLER_THREADS];   /* thread's structures   */
+
+    /* create the request-handling threads */
+    for (i = 0; i < NUM_HANDLER_THREADS; i++) {
+        thr_id[i] = i;
+        pthread_create(&p_threads[i], NULL, handle_requests_loop, (void*)&thr_id[i]);
+    }
+
+    pthread_mutex_init(&r_mutex, NULL);
+    pthread_mutex_init(&w_mutex, NULL);
+
     struct sockaddr_in their_addr; /* connector's address information */
     socklen_t sin_size;
     int sockfd = setup_server_connection(argv[1]);
 
-    logins *head = NULL;
+
     setup_login_information(&head);
 
-    Score *best = NULL;
 
+    int new_fd;
     while (1) { /* main accept() loop */
         sin_size = sizeof(struct sockaddr_in);
         if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
@@ -40,52 +97,206 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        if (!fork()) {
-            printf("created child for new game\n");
+        add_request(new_fd, &request_mutex, &got_request);
+    }
+}
 
-            logins *current_login = authenticate_access(new_fd, head);
+/*
+ * function add_request(): add a request to the requests list
+ * algorithm: creates a request structure, adds to the list, and
+ *            increases number of pending requests by one.
+ * input:     request number, linked list mutex.
+ * output:    none.
+ */
+void add_request(int new_fd,
+            pthread_mutex_t* p_mutex,
+            pthread_cond_t*  p_cond_var)
+{
+    int rc;                         /* return code of pthreads functions.  */
+    struct request* a_request;      /* pointer to newly added request.     */
 
-            if (current_login != NULL) {
-                while (1) {
-                    int selection;
-                    if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
-                        perror("Couldn't receive client selection.");
-                    }
+    /* create structure with new request */
+    a_request = (struct request*)malloc(sizeof(struct request));
+    if (!a_request) { /* malloc failed?? */
+        fprintf(stderr, "add_request: out of memory\n");
+        exit(1);
+    }
+    a_request->new_fd = new_fd;
+    a_request->next = NULL;
 
-                    if (selection == 1) {
-                        long int start, end;
-                        time(&start);
-                        int game_result = play_minesweeper(new_fd);
-                        time(&end);
-                        current_login->games_played++;
+    /* lock the mutex, to assure exclusive access to the list */
+    rc = pthread_mutex_lock(p_mutex);
 
-                        if (game_result == GAME_WON) {
-                            current_login->games_won++;
+    /* add new request to the end of the list, updating list */
+    /* pointers as required */
+    if (num_requests == 0) { /* special case - list is empty */
+        requests = a_request;
+        last_request = a_request;
+    }
+    else {
+        last_request->next = a_request;
+        last_request = a_request;
+    }
 
-                            Score *score = malloc(sizeof(Score));
-                            score->user = current_login;
-                            score->duration = end - start;
+    /* increase total number of pending requests by one. */
+    num_requests++;
 
-                            insert_score(&best, score);
-                        }
-                    } else if (selection == 2) {
-                        send_highscore_data(best, new_fd);
-                    } else if (selection == 3) {
-                        break;
-                    }
-                }
+    /* unlock mutex */
+    rc = pthread_mutex_unlock(p_mutex);
+
+    /* signal the condition variable - there's a new request to handle */
+    rc = pthread_cond_signal(p_cond_var);
+}
+
+
+/*
+ * function get_request(): gets the first pending request from the requests list
+ *                         removing it from the list.
+ * algorithm: creates a request structure, adds to the list, and
+ *            increases number of pending requests by one.
+ * input:     request number, linked list mutex.
+ * output:    pointer to the removed request, or NULL if none.
+ * memory:    the returned request need to be freed by the caller.
+ */
+struct request* get_request(pthread_mutex_t* p_mutex)
+{
+    int rc;                         /* return code of pthreads functions.  */
+    struct request* a_request;      /* pointer to request.                 */
+
+    /* lock the mutex, to assure exclusive access to the list */
+    rc = pthread_mutex_lock(p_mutex);
+
+    if (num_requests > 0) {
+        a_request = requests;
+        requests = a_request->next;
+        if (requests == NULL) { /* this was the last request on the list */
+            last_request = NULL;
+        }
+        /* decrease the total number of pending requests */
+        num_requests--;
+    }
+    else { /* requests list is empty */
+        a_request = NULL;
+    }
+
+    /* unlock mutex */
+    rc = pthread_mutex_unlock(p_mutex);
+
+    /* return the request to the caller. */
+    return a_request;
+}
+
+
+void handle_request(struct request* a_request, int thread_id) {
+    int new_fd = a_request->new_fd;
+    printf("created child for new game\n");
+
+    logins *current_login = authenticate_access(new_fd, head);
+
+    if (current_login != NULL) {
+        while (1) {
+            int selection;
+            if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
+                perror("Couldn't receive client selection.");
             }
 
-            // Quitting game
-            printf("Closing connection and exiting child process\n");
-            close(new_fd);
-            exit(0);
-        }
-        close(new_fd); /* parent doesn't need this */
+            if (selection == 1) {
+                long int start, end;
+                time(&start);
+                int game_result = play_minesweeper(new_fd);
+                time(&end);
+                current_login->games_played++;
 
-        /* clean up child processes */
-        while (waitpid(-1, NULL, WNOHANG) > 0)
-            ;
+                if (game_result == GAME_WON) {
+                    current_login->games_won++;
+
+                    Score *score = malloc(sizeof(Score));
+                    score->user = current_login;
+                    score->duration = end - start;
+
+                    //need a mutex here
+                    pthread_mutex_lock(&w_mutex);
+                    insert_score(&best, score);
+                    pthread_mutex_unlock(&w_mutex);
+                }
+            } else if (selection == 2) {
+                pthread_mutex_lock(&r_mutex);
+                rdcount++;
+                if (rdcount == 1) {
+                    pthread_mutex_lock(&w_mutex);
+                }
+
+                pthread_mutex_unlock(&r_mutex);
+                
+                send_highscore_data(best, new_fd);
+
+                pthread_mutex_lock(&r_mutex);
+                rdcount--;
+
+                if (rdcount == 0) {
+                    pthread_mutex_unlock(&w_mutex);
+                }
+                pthread_mutex_unlock(&r_mutex);
+
+
+            } else if (selection == 3) {
+                break;
+            }
+        }
+    }
+
+    // Quitting game
+    printf("Closing connection and exiting child process\n");
+    // close(new_fd);
+    // exit(0);
+
+    // close(new_fd); /* parent doesn't need this */
+}
+
+/*
+ * function handle_requests_loop(): infinite loop of requests handling
+ * algorithm: forever, if there are requests to handle, take the first
+ *            and handle it. Then wait on the given condition variable,
+ *            and when it is signaled, re-do the loop.
+ *            increases number of pending requests by one.
+ * input:     id of thread, for printing purposes.
+ * output:    none.
+ */
+void* handle_requests_loop(void* data)
+{
+    int rc;                         /* return code of pthreads functions.  */
+    struct request* a_request;      /* pointer to a request.               */
+    int thread_id = *((int*)data);  /* thread identifying number           */
+
+
+    /* lock the mutex, to access the requests list exclusively. */
+    rc = pthread_mutex_lock(&request_mutex);
+
+    /* do forever.... */
+    while (1) {
+
+        if (num_requests > 0) { /* a request is pending */
+            a_request = get_request(&request_mutex);
+            if (a_request) { /* got a request - handle it and free it */
+                /* unlock mutex - so other threads would be able to handle */
+                /* other reqeusts waiting in the queue paralelly.          */
+                rc = pthread_mutex_unlock(&request_mutex);
+                handle_request(a_request, thread_id);
+                free(a_request);
+                /* and lock the mutex again. */
+                rc = pthread_mutex_lock(&request_mutex);
+            }
+        }
+        else {
+            /* wait for a request to arrive. note the mutex will be */
+            /* unlocked here, thus allowing other threads access to */
+            /* requests list.                                       */
+
+            rc = pthread_cond_wait(&got_request, &request_mutex);
+            /* and after we return from pthread_cond_wait, the mutex  */
+            /* is locked again, so we don't need to lock it ourselves */
+
+        }
     }
 }
 
@@ -174,6 +385,7 @@ void setup_login_information(logins **head_address) {
 
 int play_minesweeper(int new_fd) {
     GameState *game = malloc(sizeof(GameState));
+
     initialise_game(game);
     send(new_fd, game, sizeof(GameState), 0);
 

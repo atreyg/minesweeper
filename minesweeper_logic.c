@@ -1,5 +1,8 @@
 #include "minesweeper_logic.h"
 #include "common_constants.h"
+#include <pthread.h>
+
+pthread_mutex_t mutex;
 
 void initialise_game(GameState *game) {
     game->mines_left = NUM_MINES;
@@ -14,7 +17,10 @@ void initialise_game(GameState *game) {
         }
     }
 
+    //mutex for random number generation
+    pthread_mutex_lock(&mutex);
     place_mines(game);
+    pthread_mutex_unlock(&mutex);
     // time = 0
     // reset and allocate memory
 }

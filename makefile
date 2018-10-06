@@ -1,6 +1,6 @@
 TARGET = client server
 CC = gcc
-CFLAGS = -Wall -Wextra -g
+CFLAGS = -Wall -Wextra -g -pthread
 normal: $(TARGET)
 client: client.c
 	$(CC) $(CFLAGS) client.c minesweeper_logic.c -o client
