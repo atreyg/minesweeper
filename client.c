@@ -142,11 +142,18 @@ void update_game_state(GameState *game, int sockfd) {
     print_game_state(game);
 }
 
+void clear_buffer() {
+    char c;
+    while ((c = getchar()) != '\n' && c != EOF) {
+    }
+}
+
 void get_and_send_tile_coordinates(int sockfd) {
     char row;
     int column;
     printf("Please input a coordinate: ");
     scanf(" %c%d", &row, &column);
+    clear_buffer();
 
     send(sockfd, &row, sizeof(row), 0);
     send(sockfd, &column, sizeof(column), 0);
@@ -161,6 +168,7 @@ char select_game_action() {
     do {
         printf("\nOption (R,P,Q): ");
         scanf(" %c", &option);
+        clear_buffer();
     } while (option != 'R' && option != 'P' && option != 'Q');
     return option;
 }
@@ -176,6 +184,7 @@ int select_client_action(int sockfd) {
     do {
         printf("\nSelection option (1-3): ");
         scanf("%d", &selection);
+        clear_buffer();
     } while (selection < 1 || selection > 3);
 
     if (send(sockfd, &selection, sizeof(selection), 0) == -1) {

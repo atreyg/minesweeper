@@ -2,6 +2,8 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,8 +12,6 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <semaphore.h>
 
 #include "common_constants.h"
 #include "highscore_logic.c"
@@ -19,13 +19,11 @@
 
 #include "minesweeper_logic.h"
 
-void add_request(int new_fd,
-            pthread_mutex_t* p_mutex,
-            pthread_cond_t*  p_cond_var);
-struct request* get_request(pthread_mutex_t* p_mutex);
-void handle_request(struct request* a_request, int thread_id);
-void* handle_requests_loop(void* data);
-
+void add_request(int new_fd, pthread_mutex_t *p_mutex,
+                 pthread_cond_t *p_cond_var);
+struct request *get_request(pthread_mutex_t *p_mutex);
+void handle_request(struct request *a_request, int thread_id);
+void *handle_requests_loop(void *data);
 
 /* number of threads used to service requests */
 #define NUM_HANDLER_THREADS 3
@@ -36,16 +34,16 @@ void* handle_requests_loop(void* data);
 pthread_mutex_t request_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 
 /* global condition variable for our program. assignment initializes it. */
-pthread_cond_t  got_request = PTHREAD_COND_INITIALIZER;
+pthread_cond_t got_request = PTHREAD_COND_INITIALIZER;
 
 pthread_mutex_t r_mutex, w_mutex;
 
 sem_t mutex;
 
-//used for synchronisation with highscores
+// used for synchronisation with highscores
 int rdcount = 0;
 
-int num_requests = 0;   /* number of pending requests, initially none */
+int num_requests = 0; /* number of pending requests, initially none */
 
 Score *best = NULL;
 
@@ -54,12 +52,11 @@ logins *head = NULL;
 /* format of a single request. */
 struct request {
     int new_fd;
-    struct request* next;   /* pointer to next request, NULL if none. */
+    struct request *next; /* pointer to next request, NULL if none. */
 };
 
-struct request* requests = NULL;     /* head of linked list of requests. */
-struct request* last_request = NULL; /* pointer to last request.         */
-
+struct request *requests = NULL;     /* head of linked list of requests. */
+struct request *last_request = NULL; /* pointer to last request.         */
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -67,14 +64,15 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    int        i;                                /* loop counter          */
-    int        thr_id[NUM_HANDLER_THREADS];      /* thread IDs            */
-    pthread_t  p_threads[NUM_HANDLER_THREADS];   /* thread's structures   */
+    int i;                                    /* loop counter          */
+    int thr_id[NUM_HANDLER_THREADS];          /* thread IDs            */
+    pthread_t p_threads[NUM_HANDLER_THREADS]; /* thread's structures   */
 
     /* create the request-handling threads */
     for (i = 0; i < NUM_HANDLER_THREADS; i++) {
         thr_id[i] = i;
-        pthread_create(&p_threads[i], NULL, handle_requests_loop, (void*)&thr_id[i]);
+        pthread_create(&p_threads[i], NULL, handle_requests_loop,
+                       (void *)&thr_id[i]);
     }
 
     pthread_mutex_init(&r_mutex, NULL);
@@ -84,9 +82,7 @@ int main(int argc, char *argv[]) {
     socklen_t sin_size;
     int sockfd = setup_server_connection(argv[1]);
 
-
     setup_login_information(&head);
-
 
     int new_fd;
     while (1) { /* main accept() loop */
@@ -108,15 +104,13 @@ int main(int argc, char *argv[]) {
  * input:     request number, linked list mutex.
  * output:    none.
  */
-void add_request(int new_fd,
-            pthread_mutex_t* p_mutex,
-            pthread_cond_t*  p_cond_var)
-{
-    int rc;                         /* return code of pthreads functions.  */
-    struct request* a_request;      /* pointer to newly added request.     */
+void add_request(int new_fd, pthread_mutex_t *p_mutex,
+                 pthread_cond_t *p_cond_var) {
+    int rc;                    /* return code of pthreads functions.  */
+    struct request *a_request; /* pointer to newly added request.     */
 
     /* create structure with new request */
-    a_request = (struct request*)malloc(sizeof(struct request));
+    a_request = (struct request *)malloc(sizeof(struct request));
     if (!a_request) { /* malloc failed?? */
         fprintf(stderr, "add_request: out of memory\n");
         exit(1);
@@ -132,8 +126,7 @@ void add_request(int new_fd,
     if (num_requests == 0) { /* special case - list is empty */
         requests = a_request;
         last_request = a_request;
-    }
-    else {
+    } else {
         last_request->next = a_request;
         last_request = a_request;
     }
@@ -148,7 +141,6 @@ void add_request(int new_fd,
     rc = pthread_cond_signal(p_cond_var);
 }
 
-
 /*
  * function get_request(): gets the first pending request from the requests list
  *                         removing it from the list.
@@ -158,10 +150,9 @@ void add_request(int new_fd,
  * output:    pointer to the removed request, or NULL if none.
  * memory:    the returned request need to be freed by the caller.
  */
-struct request* get_request(pthread_mutex_t* p_mutex)
-{
-    int rc;                         /* return code of pthreads functions.  */
-    struct request* a_request;      /* pointer to request.                 */
+struct request *get_request(pthread_mutex_t *p_mutex) {
+    int rc;                    /* return code of pthreads functions.  */
+    struct request *a_request; /* pointer to request.                 */
 
     /* lock the mutex, to assure exclusive access to the list */
     rc = pthread_mutex_lock(p_mutex);
@@ -174,8 +165,7 @@ struct request* get_request(pthread_mutex_t* p_mutex)
         }
         /* decrease the total number of pending requests */
         num_requests--;
-    }
-    else { /* requests list is empty */
+    } else { /* requests list is empty */
         a_request = NULL;
     }
 
@@ -186,8 +176,7 @@ struct request* get_request(pthread_mutex_t* p_mutex)
     return a_request;
 }
 
-
-void handle_request(struct request* a_request, int thread_id) {
+void handle_request(struct request *a_request, int thread_id) {
     int new_fd = a_request->new_fd;
     printf("created child for new game\n");
 
@@ -214,7 +203,7 @@ void handle_request(struct request* a_request, int thread_id) {
                     score->user = current_login;
                     score->duration = end - start;
 
-                    //need a mutex here
+                    // need a mutex here
                     pthread_mutex_lock(&w_mutex);
                     insert_score(&best, score);
                     pthread_mutex_unlock(&w_mutex);
@@ -227,7 +216,7 @@ void handle_request(struct request* a_request, int thread_id) {
                 }
 
                 pthread_mutex_unlock(&r_mutex);
-                
+
                 send_highscore_data(best, new_fd);
 
                 pthread_mutex_lock(&r_mutex);
@@ -237,7 +226,6 @@ void handle_request(struct request* a_request, int thread_id) {
                     pthread_mutex_unlock(&w_mutex);
                 }
                 pthread_mutex_unlock(&r_mutex);
-
 
             } else if (selection == 3) {
                 break;
@@ -262,19 +250,16 @@ void handle_request(struct request* a_request, int thread_id) {
  * input:     id of thread, for printing purposes.
  * output:    none.
  */
-void* handle_requests_loop(void* data)
-{
+void *handle_requests_loop(void *data) {
     int rc;                         /* return code of pthreads functions.  */
-    struct request* a_request;      /* pointer to a request.               */
-    int thread_id = *((int*)data);  /* thread identifying number           */
-
+    struct request *a_request;      /* pointer to a request.               */
+    int thread_id = *((int *)data); /* thread identifying number           */
 
     /* lock the mutex, to access the requests list exclusively. */
     rc = pthread_mutex_lock(&request_mutex);
 
     /* do forever.... */
     while (1) {
-
         if (num_requests > 0) { /* a request is pending */
             a_request = get_request(&request_mutex);
             if (a_request) { /* got a request - handle it and free it */
@@ -286,8 +271,7 @@ void* handle_requests_loop(void* data)
                 /* and lock the mutex again. */
                 rc = pthread_mutex_lock(&request_mutex);
             }
-        }
-        else {
+        } else {
             /* wait for a request to arrive. note the mutex will be */
             /* unlocked here, thus allowing other threads access to */
             /* requests list.                                       */
@@ -295,7 +279,6 @@ void* handle_requests_loop(void* data)
             rc = pthread_cond_wait(&got_request, &request_mutex);
             /* and after we return from pthread_cond_wait, the mutex  */
             /* is locked again, so we don't need to lock it ourselves */
-
         }
     }
 }
@@ -314,10 +297,10 @@ void send_highscore_data(Score *head, int new_fd) {
     while (node != NULL) {
         send(new_fd, node->user->username, sizeof(node->user->username), 0);
         send(new_fd, &(node->duration), sizeof(node->duration), 0);
-        send(new_fd, &(node->user->games_played),
-             sizeof(node->user->games_played), 0);
         send(new_fd, &(node->user->games_won), sizeof(node->user->games_won),
              0);
+        send(new_fd, &(node->user->games_played),
+             sizeof(node->user->games_played), 0);
 
         int entries_left;
         if (node->next == NULL) {
