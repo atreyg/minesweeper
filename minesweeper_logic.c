@@ -1,6 +1,6 @@
 #include "minesweeper_logic.h"
-#include "common_constants.h"
 #include <pthread.h>
+#include "common_constants.h"
 
 pthread_mutex_t mutex;
 
@@ -17,7 +17,7 @@ void initialise_game(GameState *game) {
         }
     }
 
-    //mutex for random number generation
+    // mutex for random number generation
     pthread_mutex_lock(&mutex);
     place_mines(game);
     pthread_mutex_unlock(&mutex);
@@ -109,7 +109,18 @@ int search_tiles(GameState *game, int row, int column) {
 }
 
 int game_over(GameState *game) {
-    print_game_state(game);
+    for (int row = 0; row < NUM_TILES_Y; row++) {
+        for (int column = 0; column < NUM_TILES_X; column++) {
+            Tile *tile = &game->tiles[row][column];
+
+            if (tile->is_mine) {
+                tile->revealed = true;
+            } else if (tile->revealed) {
+                tile->revealed = false;
+            }
+        }
+    }
+
     game->gameOver = true;
     return GAME_LOST;
 }
