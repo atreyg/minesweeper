@@ -28,6 +28,8 @@ void *handle_requests_loop(void *data);
 /* number of threads used to service requests */
 #define NUM_HANDLER_THREADS 3
 
+#define RANDOM_NUMBER_SEED 42
+
 /* global mutex for our program. assignment initializes it. */
 /* note that we use a RECURSIVE mutex, since a handler      */
 /* thread might try to lock it twice consecutively.         */
@@ -58,15 +60,31 @@ struct request {
 struct request *requests = NULL;     /* head of linked list of requests. */
 struct request *last_request = NULL; /* pointer to last request.         */
 
+volatile int shutdown_active = 0;
+
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
+    int port_no;
+
+    if (argc > 2) {
         fprintf(stderr, "usage: server port_number\n");
         exit(1);
     }
 
+    if (argc == 2) {
+        port_no = atoi(argv[1]);
+    } else {
+        port_no = 12345;
+    }
+
+    srand(RANDOM_NUMBER_SEED);
+    signal(SIGINT, initiate_shutdown);
+
     int i;                                    /* loop counter          */
     int thr_id[NUM_HANDLER_THREADS];          /* thread IDs            */
     pthread_t p_threads[NUM_HANDLER_THREADS]; /* thread's structures   */
+
+    fd_set master;    // master file descriptor list
+    fd_set read_fds;  // temp file descriptor list for select()
 
     /* create the request-handling threads */
     for (i = 0; i < NUM_HANDLER_THREADS; i++) {
@@ -80,21 +98,59 @@ int main(int argc, char *argv[]) {
 
     struct sockaddr_in their_addr; /* connector's address information */
     socklen_t sin_size;
-    int sockfd = setup_server_connection(argv[1]);
+    int sockfd = setup_server_connection(port_no);
 
     setup_login_information(&head);
 
-    int new_fd;
-    while (1) { /* main accept() loop */
-        sin_size = sizeof(struct sockaddr_in);
-        if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
-                             &sin_size)) == -1) {
-            perror("accept");
-            continue;
-        }
+    FD_SET(sockfd, &master);
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
 
-        add_request(new_fd, &request_mutex, &got_request);
+    int new_fd;
+    while (!shutdown_active) { /* main accept() loop */
+        read_fds = master;
+
+        select(sockfd + 1, &read_fds, NULL, NULL, &tv);
+        // printf("polll.\n");
+        if (FD_ISSET(sockfd, &read_fds)) {
+            sin_size = sizeof(struct sockaddr_in);
+            if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
+                                 &sin_size)) == -1) {
+                perror("accept");
+                continue;
+            }
+
+            add_request(new_fd, &request_mutex, &got_request);
+        }
     }
+
+    printf("Main thread: Clearing shared data.\n");
+    while (best != NULL) {
+        Score *next = best->next;
+        free(best);
+        best = next;
+    }
+    while (head != NULL) {
+        logins *next = head->next;
+        free(head);
+        head = next;
+    }
+    while (requests != NULL) {
+        struct request *next = requests->next;
+        close(requests->new_fd);
+        free(requests);
+        requests = next;
+    }
+    printf("Main thread: Cleared data, exiting.\n");
+    pthread_exit(0);
+
+    return 0;
+}
+
+void initiate_shutdown() {
+    printf("Ctrl+C pressed, initiating clean shutdown.\n");
+    shutdown_active = 1;
 }
 
 /*
@@ -106,11 +162,11 @@ int main(int argc, char *argv[]) {
  */
 void add_request(int new_fd, pthread_mutex_t *p_mutex,
                  pthread_cond_t *p_cond_var) {
-    int rc;                    /* return code of pthreads functions.  */
+    // int rc;                    /* return code of pthreads functions.  */
     struct request *a_request; /* pointer to newly added request.     */
 
     /* create structure with new request */
-    a_request = (struct request *)malloc(sizeof(struct request));
+    a_request = malloc(sizeof(struct request));
     if (!a_request) { /* malloc failed?? */
         fprintf(stderr, "add_request: out of memory\n");
         exit(1);
@@ -119,7 +175,7 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
     a_request->next = NULL;
 
     /* lock the mutex, to assure exclusive access to the list */
-    rc = pthread_mutex_lock(p_mutex);
+    pthread_mutex_lock(p_mutex);
 
     /* add new request to the end of the list, updating list */
     /* pointers as required */
@@ -135,10 +191,10 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
     num_requests++;
 
     /* unlock mutex */
-    rc = pthread_mutex_unlock(p_mutex);
+    pthread_mutex_unlock(p_mutex);
 
     /* signal the condition variable - there's a new request to handle */
-    rc = pthread_cond_signal(p_cond_var);
+    pthread_cond_signal(p_cond_var);
 }
 
 /*
@@ -151,11 +207,11 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
  * memory:    the returned request need to be freed by the caller.
  */
 struct request *get_request(pthread_mutex_t *p_mutex) {
-    int rc;                    /* return code of pthreads functions.  */
+    // int rc;                    /* return code of pthreads functions.  */
     struct request *a_request; /* pointer to request.                 */
 
     /* lock the mutex, to assure exclusive access to the list */
-    rc = pthread_mutex_lock(p_mutex);
+    pthread_mutex_lock(p_mutex);
 
     if (num_requests > 0) {
         a_request = requests;
@@ -170,7 +226,7 @@ struct request *get_request(pthread_mutex_t *p_mutex) {
     }
 
     /* unlock mutex */
-    rc = pthread_mutex_unlock(p_mutex);
+    pthread_mutex_unlock(p_mutex);
 
     /* return the request to the caller. */
     return a_request;
@@ -178,7 +234,7 @@ struct request *get_request(pthread_mutex_t *p_mutex) {
 
 void handle_request(struct request *a_request, int thread_id) {
     int new_fd = a_request->new_fd;
-    printf("created child for new game\n");
+    printf("Thread %d: Created thread for new game.\n", thread_id);
 
     logins *current_login = authenticate_access(new_fd, head);
 
@@ -251,12 +307,12 @@ void handle_request(struct request *a_request, int thread_id) {
  * output:    none.
  */
 void *handle_requests_loop(void *data) {
-    int rc;                         /* return code of pthreads functions.  */
+    // int rc;                         /* return code of pthreads functions.  */
     struct request *a_request;      /* pointer to a request.               */
     int thread_id = *((int *)data); /* thread identifying number           */
 
     /* lock the mutex, to access the requests list exclusively. */
-    rc = pthread_mutex_lock(&request_mutex);
+    pthread_mutex_lock(&request_mutex);
 
     /* do forever.... */
     while (1) {
@@ -265,18 +321,18 @@ void *handle_requests_loop(void *data) {
             if (a_request) { /* got a request - handle it and free it */
                 /* unlock mutex - so other threads would be able to handle */
                 /* other reqeusts waiting in the queue paralelly.          */
-                rc = pthread_mutex_unlock(&request_mutex);
+                pthread_mutex_unlock(&request_mutex);
                 handle_request(a_request, thread_id);
                 free(a_request);
                 /* and lock the mutex again. */
-                rc = pthread_mutex_lock(&request_mutex);
+                pthread_mutex_lock(&request_mutex);
             }
         } else {
             /* wait for a request to arrive. note the mutex will be */
             /* unlocked here, thus allowing other threads access to */
             /* requests list.                                       */
 
-            rc = pthread_cond_wait(&got_request, &request_mutex);
+            pthread_cond_wait(&got_request, &request_mutex);
             /* and after we return from pthread_cond_wait, the mutex  */
             /* is locked again, so we don't need to lock it ourselves */
         }
@@ -320,7 +376,11 @@ void insert_score(Score **head, Score *new) {
     while (1) {
         if (node == NULL || new->duration > node->duration ||
             (new->duration == node->duration &&
-             new->user->games_won < node->user->games_won)) {
+             new->user->games_won < node->user->games_won) ||
+            (new->duration == node->duration &&
+             new->user->games_won ==
+                 node->user->games_won &&strcmp(new->user->username,
+                                                node->user->username) < 0)) {
             if (prev == NULL) {
                 *head = new;
             } else {
@@ -437,15 +497,20 @@ logins *authenticate_access(int new_fd, logins *access_list) {
     return auth_login;
 }
 
-int setup_server_connection(char *port_arg) {
+int setup_server_connection(int port_no) {
     int sockfd; /* listen on sock_fd, new connection on new_fd */
     struct sockaddr_in my_addr; /* my address information */
-
-    int port_no = atoi(port_arg);
 
     /* generate the socket */
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("socket");
+        exit(1);
+    }
+
+    /* Allow port to be reused */
+    int yes = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+        perror("reuse addr");
         exit(1);
     }
 
@@ -466,6 +531,6 @@ int setup_server_connection(char *port_arg) {
         exit(1);
     }
 
-    printf("server starts listnening ...\n");
+    printf("server starts listening ...\n");
     return sockfd;
 }
