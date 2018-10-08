@@ -15,7 +15,7 @@ typedef struct tile_struct {
 
 typedef struct game_struct {
     int mines_left;
-    bool gameOver;
+    bool game_over;
     Tile tiles[NUM_TILES_X][NUM_TILES_Y];
 } GameState;
 

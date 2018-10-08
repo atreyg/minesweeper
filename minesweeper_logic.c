@@ -6,7 +6,7 @@ pthread_mutex_t mutex;
 
 void initialise_game(GameState *game) {
     game->mines_left = NUM_MINES;
-    game->gameOver = false;
+    game->game_over = false;
     for (int row = 0; row < NUM_TILES_Y; row++) {
         for (int column = 0; column < NUM_TILES_X; column++) {
             Tile *tile = &game->tiles[row][column];
@@ -85,7 +85,7 @@ int place_flag(GameState *game, int row, int column) {
 
 int check_winning_condition(GameState *game) {
     if (game->mines_left == 0) {
-        game->gameOver = true;
+        game->game_over = true;
         return GAME_WON;
     }
     return NORMAL;
@@ -121,7 +121,7 @@ int game_over(GameState *game) {
         }
     }
 
-    game->gameOver = true;
+    game->game_over = true;
     return GAME_LOST;
 }
 

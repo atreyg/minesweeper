@@ -19,14 +19,11 @@
 
 #include "minesweeper_logic.h"
 
-void add_request(int new_fd, pthread_mutex_t *p_mutex,
-                 pthread_cond_t *p_cond_var);
-struct request *get_request(pthread_mutex_t *p_mutex);
-void handle_request(struct request *a_request, int thread_id);
-void *handle_requests_loop(void *data);
-
 /* number of threads used to service requests */
-#define NUM_HANDLER_THREADS 3
+//#define NUM_HANDLER_THREADS 10
+
+// 2 threads for testing
+#define NUM_HANDLER_THREADS 2
 
 #define RANDOM_NUMBER_SEED 42
 
@@ -38,27 +35,25 @@ pthread_mutex_t request_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 /* global condition variable for our program. assignment initializes it. */
 pthread_cond_t got_request = PTHREAD_COND_INITIALIZER;
 
-pthread_mutex_t r_mutex, w_mutex;
-
-sem_t mutex;
+pthread_mutex_t read_mutex, write_mutex;
 
 // used for synchronisation with highscores
-int rdcount = 0;
+int reader_count = 0;
 
 int num_requests = 0; /* number of pending requests, initially none */
 
 Score *best = NULL;
 
-logins *head = NULL;
+Logins *head = NULL;
 
-/* format of a single request. */
-struct request {
+/* format of a single request_t. */
+struct request_t {
     int new_fd;
-    struct request *next; /* pointer to next request, NULL if none. */
+    struct request_t *next; /* pointer to next request_t, NULL if none. */
 };
 
-struct request *requests = NULL;     /* head of linked list of requests. */
-struct request *last_request = NULL; /* pointer to last request.         */
+struct request_t *requests = NULL;     /* head of linked list of requests. */
+struct request_t *last_request = NULL; /* pointer to last request_t.         */
 
 volatile int shutdown_active = 0;
 
@@ -79,22 +74,21 @@ int main(int argc, char *argv[]) {
     srand(RANDOM_NUMBER_SEED);
     signal(SIGINT, initiate_shutdown);
 
-    int i;                                    /* loop counter          */
     int thr_id[NUM_HANDLER_THREADS];          /* thread IDs            */
     pthread_t p_threads[NUM_HANDLER_THREADS]; /* thread's structures   */
 
     fd_set master;    // master file descriptor list
     fd_set read_fds;  // temp file descriptor list for select()
 
-    /* create the request-handling threads */
-    for (i = 0; i < NUM_HANDLER_THREADS; i++) {
+    /* create the request_t-handling threads */
+    for (int i = 0; i < NUM_HANDLER_THREADS; i++) {
         thr_id[i] = i;
         pthread_create(&p_threads[i], NULL, handle_requests_loop,
                        (void *)&thr_id[i]);
     }
 
-    pthread_mutex_init(&r_mutex, NULL);
-    pthread_mutex_init(&w_mutex, NULL);
+    pthread_mutex_init(&read_mutex, NULL);
+    pthread_mutex_init(&write_mutex, NULL);
 
     struct sockaddr_in their_addr; /* connector's address information */
     socklen_t sin_size;
@@ -132,12 +126,12 @@ int main(int argc, char *argv[]) {
         best = next;
     }
     while (head != NULL) {
-        logins *next = head->next;
+        Logins *next = head->next;
         free(head);
         head = next;
     }
     while (requests != NULL) {
-        struct request *next = requests->next;
+        struct request_t *next = requests->next;
         close(requests->new_fd);
         free(requests);
         requests = next;
@@ -154,19 +148,19 @@ void initiate_shutdown() {
 }
 
 /*
- * function add_request(): add a request to the requests list
- * algorithm: creates a request structure, adds to the list, and
+ * function add_request(): add a request_t to the requests list
+ * algorithm: creates a request_t structure, adds to the list, and
  *            increases number of pending requests by one.
- * input:     request number, linked list mutex.
+ * input:     request_t number, linked list mutex.
  * output:    none.
  */
 void add_request(int new_fd, pthread_mutex_t *p_mutex,
                  pthread_cond_t *p_cond_var) {
     // int rc;                    /* return code of pthreads functions.  */
-    struct request *a_request; /* pointer to newly added request.     */
+    struct request_t *a_request; /* pointer to newly added request_t.     */
 
-    /* create structure with new request */
-    a_request = malloc(sizeof(struct request));
+    /* create structure with new request_t */
+    a_request = malloc(sizeof(struct request_t));
     if (!a_request) { /* malloc failed?? */
         fprintf(stderr, "add_request: out of memory\n");
         exit(1);
@@ -177,7 +171,7 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
     /* lock the mutex, to assure exclusive access to the list */
     pthread_mutex_lock(p_mutex);
 
-    /* add new request to the end of the list, updating list */
+    /* add new request_t to the end of the list, updating list */
     /* pointers as required */
     if (num_requests == 0) { /* special case - list is empty */
         requests = a_request;
@@ -193,22 +187,21 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
     /* unlock mutex */
     pthread_mutex_unlock(p_mutex);
 
-    /* signal the condition variable - there's a new request to handle */
+    /* signal the condition variable - there's a new request_t to handle */
     pthread_cond_signal(p_cond_var);
 }
 
 /*
- * function get_request(): gets the first pending request from the requests list
- *                         removing it from the list.
- * algorithm: creates a request structure, adds to the list, and
- *            increases number of pending requests by one.
- * input:     request number, linked list mutex.
- * output:    pointer to the removed request, or NULL if none.
- * memory:    the returned request need to be freed by the caller.
+ * function get_request(): gets the first pending request_t from the requests
+ * list removing it from the list. algorithm: creates a request_t structure,
+ * adds to the list, and increases number of pending requests by one. input:
+ * request_t number, linked list mutex. output:    pointer to the removed
+ * request_t, or NULL if none. memory:    the returned request_t need to be
+ * freed by the caller.
  */
-struct request *get_request(pthread_mutex_t *p_mutex) {
+struct request_t *get_request(pthread_mutex_t *p_mutex) {
     // int rc;                    /* return code of pthreads functions.  */
-    struct request *a_request; /* pointer to request.                 */
+    struct request_t *a_request; /* pointer to request_t.                 */
 
     /* lock the mutex, to assure exclusive access to the list */
     pthread_mutex_lock(p_mutex);
@@ -216,7 +209,7 @@ struct request *get_request(pthread_mutex_t *p_mutex) {
     if (num_requests > 0) {
         a_request = requests;
         requests = a_request->next;
-        if (requests == NULL) { /* this was the last request on the list */
+        if (requests == NULL) { /* this was the last request_t on the list */
             last_request = NULL;
         }
         /* decrease the total number of pending requests */
@@ -228,15 +221,15 @@ struct request *get_request(pthread_mutex_t *p_mutex) {
     /* unlock mutex */
     pthread_mutex_unlock(p_mutex);
 
-    /* return the request to the caller. */
+    /* return the request_t to the caller. */
     return a_request;
 }
 
-void handle_request(struct request *a_request, int thread_id) {
+void handle_request(struct request_t *a_request, int thread_id) {
     int new_fd = a_request->new_fd;
     printf("Thread %d: Created thread for new game.\n", thread_id);
 
-    logins *current_login = authenticate_access(new_fd, head);
+    Logins *current_login = authenticate_access(new_fd, head);
 
     if (current_login != NULL) {
         while (1) {
@@ -260,28 +253,28 @@ void handle_request(struct request *a_request, int thread_id) {
                     score->duration = end - start;
 
                     // need a mutex here
-                    pthread_mutex_lock(&w_mutex);
+                    pthread_mutex_lock(&write_mutex);
                     insert_score(&best, score);
-                    pthread_mutex_unlock(&w_mutex);
+                    pthread_mutex_unlock(&write_mutex);
                 }
             } else if (selection == 2) {
-                pthread_mutex_lock(&r_mutex);
-                rdcount++;
-                if (rdcount == 1) {
-                    pthread_mutex_lock(&w_mutex);
+                pthread_mutex_lock(&read_mutex);
+                reader_count++;
+                if (reader_count == 1) {
+                    pthread_mutex_lock(&write_mutex);
                 }
 
-                pthread_mutex_unlock(&r_mutex);
+                pthread_mutex_unlock(&read_mutex);
 
                 send_highscore_data(best, new_fd);
 
-                pthread_mutex_lock(&r_mutex);
-                rdcount--;
+                pthread_mutex_lock(&read_mutex);
+                reader_count--;
 
-                if (rdcount == 0) {
-                    pthread_mutex_unlock(&w_mutex);
+                if (reader_count == 0) {
+                    pthread_mutex_unlock(&write_mutex);
                 }
-                pthread_mutex_unlock(&r_mutex);
+                pthread_mutex_unlock(&read_mutex);
 
             } else if (selection == 3) {
                 break;
@@ -307,8 +300,7 @@ void handle_request(struct request *a_request, int thread_id) {
  * output:    none.
  */
 void *handle_requests_loop(void *data) {
-    // int rc;                         /* return code of pthreads functions.  */
-    struct request *a_request;      /* pointer to a request.               */
+    struct request_t *a_request;    /* pointer to a request_t.               */
     int thread_id = *((int *)data); /* thread identifying number           */
 
     /* lock the mutex, to access the requests list exclusively. */
@@ -316,9 +308,9 @@ void *handle_requests_loop(void *data) {
 
     /* do forever.... */
     while (1) {
-        if (num_requests > 0) { /* a request is pending */
+        if (num_requests > 0) { /* a request_t is pending */
             a_request = get_request(&request_mutex);
-            if (a_request) { /* got a request - handle it and free it */
+            if (a_request) { /* got a request_t - handle it and free it */
                 /* unlock mutex - so other threads would be able to handle */
                 /* other reqeusts waiting in the queue paralelly.          */
                 pthread_mutex_unlock(&request_mutex);
@@ -328,7 +320,7 @@ void *handle_requests_loop(void *data) {
                 pthread_mutex_lock(&request_mutex);
             }
         } else {
-            /* wait for a request to arrive. note the mutex will be */
+            /* wait for a request_t to arrive. note the mutex will be */
             /* unlocked here, thus allowing other threads access to */
             /* requests list.                                       */
 
@@ -395,15 +387,15 @@ void insert_score(Score **head, Score *new) {
     }
 }
 
-void setup_login_information(logins **head_address) {
+void setup_login_information(Logins **head_address) {
     FILE *login_file = fopen("Authentication.txt", "r");
     if (!login_file) {
         exit(1);
     }
 
-    logins *prev = *head_address;
+    Logins *prev = *head_address;
     while (1) {
-        logins *curr_node = malloc(sizeof(logins));
+        Logins *curr_node = malloc(sizeof(Logins));
 
         if (fscanf(login_file, "%s %s", curr_node->username,
                    curr_node->password) != 2) {
@@ -462,8 +454,8 @@ int play_minesweeper(int new_fd) {
     return 1;
 }
 
-logins *check_details(logins *head, char *usr, char *pwd) {
-    logins *curr_node = head;
+Logins *check_details(Logins *head, char *usr, char *pwd) {
+    Logins *curr_node = head;
     while (curr_node->next != NULL) {
         if (strcmp(curr_node->username, usr) == 0 &&
             strcmp(curr_node->password, pwd) == 0) {
@@ -474,7 +466,7 @@ logins *check_details(logins *head, char *usr, char *pwd) {
     return NULL;
 }
 
-logins *authenticate_access(int new_fd, logins *access_list) {
+Logins *authenticate_access(int new_fd, Logins *access_list) {
     char usr[MAX_READ_LENGTH];
     char pwd[MAX_READ_LENGTH];
     if (recv(new_fd, usr, MAX_READ_LENGTH, 0) == -1) {
@@ -484,7 +476,7 @@ logins *authenticate_access(int new_fd, logins *access_list) {
         perror("Couldn't receive password.");
     };
 
-    logins *auth_login = check_details(access_list, usr, pwd);
+    Logins *auth_login = check_details(access_list, usr, pwd);
     int auth_val;
     if (auth_login == NULL) {
         auth_val = 0;
