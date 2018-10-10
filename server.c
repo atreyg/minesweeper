@@ -149,7 +149,6 @@ void initiate_shutdown() {
  */
 void add_request(int new_fd, pthread_mutex_t *p_mutex,
                  pthread_cond_t *p_cond_var) {
-    // int rc;                    /* return code of pthreads functions.  */
     Request *a_request; /* pointer to newly added request_t.     */
 
     /* create structure with new request_t */
@@ -244,7 +243,7 @@ void handle_request(Request *a_request, int thread_id) {
     }
 
     int selection;
-    do {
+    while (!shutdown_active) {
         if (read_helper(new_fd, &selection, sizeof(selection))) {
             if (selection == 1) {
                 long int start, end;
@@ -283,11 +282,11 @@ void handle_request(Request *a_request, int thread_id) {
                     pthread_mutex_unlock(&write_mutex);
                 }
                 pthread_mutex_unlock(&read_mutex);
+            } else if (selection == 3) {
+                break;
             }
-        } else {
-            break;
         }
-    } while (selection != 3);
+    }
 
     // Quitting game
     close(new_fd);
@@ -332,12 +331,13 @@ void *handle_requests_loop(void *data) {
             pthread_cond_wait(&got_request, &request_mutex);
             /* and after we return from pthread_cond_wait, the mutex  */
             /* is locked again, so we don't need to lock it ourselves */
-            pthread_mutex_unlock(&request_mutex);
         }
     }
 
     // pthread_cond_broadcast(&got_request);
     printf("Thread %d: Exiting\n", thread_id);
+    pthread_mutex_unlock(&request_mutex);
+
     pthread_exit(0);
 }
 
@@ -436,8 +436,12 @@ int play_minesweeper(int new_fd, int thread_id) {
 
     char row, option;
     int column;
-    if (read_helper(new_fd, &option, sizeof(option))) {
-        if (option != 'Q') {
+    while (!shutdown_active) {
+        if (read_helper(new_fd, &option, sizeof(option))) {
+            if (option == 'Q') {
+                break;
+            }
+
             if (read_helper(new_fd, &row, sizeof(row))) {
                 if (read_helper(new_fd, &column, sizeof(column))) {
                     int response;
