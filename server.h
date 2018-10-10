@@ -19,9 +19,9 @@ typedef struct request_t {
 } Request;
 
 int setup_server_connection(int port_no);
-Login *authenticate_access(int new_fd, Login *access_list);
+Login *authenticate_access(int new_fd, Login *access_list, int thread_id);
 Login *check_details(Login *head, char *usr, char *pwd);
-int play_minesweeper(int new_fd);
+int play_minesweeper(int new_fd, int thread_id);
 void setup_login_information(Login **head);
 void send_highscore_data(Score *head, int new_fd);
 void insert_score(Score **score, Score *new);
@@ -31,3 +31,4 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
 struct request_t *get_request(pthread_mutex_t *p_mutex);
 void handle_request(struct request_t *a_request, int thread_id);
 void *handle_requests_loop(void *data);
+int read_helper(int fd, void *buff, size_t len);

@@ -12,7 +12,7 @@
 //#include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
-//#include <unistd.h>
+#include <unistd.h>
 
 #include "common_constants.h"
 #include "server.h"
@@ -20,33 +20,32 @@
 #include "minesweeper_logic.h"
 
 /* number of threads used to service requests */
-//#define NUM_HANDLER_THREADS 10
-
-// 2 threads for testing
-#define NUM_HANDLER_THREADS 0
+#define NUM_HANDLER_THREADS 10
 
 #define RANDOM_NUMBER_SEED 42
 
 /* global mutex for our program. assignment initializes it. */
 /* note that we use a RECURSIVE mutex, since a handler      */
 /* thread might try to lock it twice consecutively.         */
-// pthread_mutex_t request_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+pthread_mutex_t request_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 
 /* global condition variable for our program. assignment initializes it. */
-// pthread_cond_t got_request = PTHREAD_COND_INITIALIZER;
+pthread_cond_t got_request = PTHREAD_COND_INITIALIZER;
 
-// pthread_mutex_t read_mutex, write_mutex;
-// pthread_mutex_t sigint_mutex;
+pthread_mutex_t read_mutex, write_mutex;
+pthread_mutex_t sigint_mutex;
 // used for synchronisation with highscores
-// int reader_count = 0;
-// int num_requests = 0; /* number of pending requests, initially none */
+int reader_count = 0;
+int num_requests = 0; /* number of pending requests, initially none */
 
-// Score *best = NULL;
+Score *best = NULL;
 
-// Login *head = NULL;
+Login *head = NULL;
 
-// Request *requests = NULL;     /* head of linked list of requests. */
-// Request *last_request = NULL; /* pointer to last request_t.         */
+Request *requests = NULL;     /* head of linked list of requests. */
+Request *last_request = NULL; /* pointer to last request_t.         */
+
+struct timeval tv;
 
 volatile int shutdown_active = 0;
 
@@ -67,427 +66,437 @@ int main(int argc, char *argv[]) {
     srand(RANDOM_NUMBER_SEED);
     signal(SIGINT, initiate_shutdown);
 
-    // int thr_id[NUM_HANDLER_THREADS];          /* thread IDs            */
-    // pthread_t p_threads[NUM_HANDLER_THREADS]; /* thread's structures   */
+    int thr_id[NUM_HANDLER_THREADS];          /* thread IDs            */
+    pthread_t p_threads[NUM_HANDLER_THREADS]; /* thread's structures   */
 
     fd_set master;    // master file descriptor list
     fd_set read_fds;  // temp file descriptor list for select()
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
 
     /* create the request_t-handling threads */
-    // for (int i = 0; i < NUM_HANDLER_THREADS; i++) {
-    //     thr_id[i] = i;
-    //     pthread_create(&p_threads[i], NULL, handle_requests_loop,
-    //                    (void *)&thr_id[i]);
-    // }
+    for (int i = 0; i < NUM_HANDLER_THREADS; i++) {
+        thr_id[i] = i;
+        pthread_create(&p_threads[i], NULL, handle_requests_loop,
+                       (void *)&thr_id[i]);
+    }
 
-    // pthread_mutex_init(&read_mutex, NULL);
-    // pthread_mutex_init(&write_mutex, NULL);
+    pthread_mutex_init(&read_mutex, NULL);
+    pthread_mutex_init(&write_mutex, NULL);
 
-    // struct sockaddr_in their_addr; /* connector's address information */
-    // socklen_t sin_size;
+    struct sockaddr_in their_addr; /* connector's address information */
+    socklen_t sin_size;
     int sockfd = setup_server_connection(port_no);
-    // setup_login_information(&head);
+    setup_login_information(&head);
 
     FD_ZERO(&master);
     FD_SET(sockfd, &master);
-    struct timespec tv;
-    tv.tv_sec = 0;
-    tv.tv_nsec = 0;
-    sigset_t sigset, oldset;
-    sigemptyset(&sigset);
-    sigaddset(&sigset, SIGTERM);
-    sigprocmask(SIG_BLOCK, &sigset, &oldset);
+    int fdmax = sockfd;
 
-    // int new_fd;
+    int new_fd;
     while (!shutdown_active) { /* main accept() loop */
         read_fds = master;
-        pselect(sockfd + 1, &read_fds, NULL, NULL, &tv, &oldset);
+        select(fdmax + 1, &read_fds, NULL, NULL, &tv);
 
         if (FD_ISSET(sockfd, &read_fds)) {
-            printf("inside if %d\n", FD_ISSET(sockfd, &read_fds));
-            // sin_size = sizeof(struct sockaddr_in);
-            // if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
-            //                      &sin_size)) == -1) {
-            //     perror("accept");
-            //     continue;
-            // }
+            sin_size = sizeof(struct sockaddr_in);
+            if ((new_fd = accept(sockfd, (struct sockaddr *)&their_addr,
+                                 &sin_size)) == -1) {
+                perror("accept");
+                continue;
+            }
 
-            // add_request(new_fd, &request_mutex, &got_request);
+            add_request(new_fd, &request_mutex, &got_request);
         }
-
-        printf("hiiiiiiii\n");
     }
 
     printf("Main thread: Clearing shared data.\n");
-    // while (best != NULL) {
-    //     Score *next = best->next;
-    //     free(best);
-    //     best = next;
-    // }
-    // while (head != NULL) {
-    //     Login *next = head->next;
-    //     free(head);
-    //     head = next;
-    // }
-    // while (requests != NULL) {
-    //     Request *next = requests->next;
-    //     close(requests->new_fd);
-    //     free(requests);
-    //     requests = next;
-    // }
+    while (best != NULL) {
+        Score *next = best->next;
+        free(best);
+        best = next;
+    }
+    while (head != NULL) {
+        Login *next = head->next;
+        free(head);
+        head = next;
+    }
+    while (requests != NULL) {
+        Request *next = requests->next;
+        close(requests->new_fd);
+        free(requests);
+        requests = next;
+    }
+    printf("Main thread: Unblocking all threads waiting on request.\n");
+    pthread_cond_broadcast(&got_request);
+
     printf("Main thread: Cleared data, exiting.\n");
     pthread_exit(0);
-
     return 0;
 }
 
 void initiate_shutdown() {
     printf("Ctrl+C pressed, initiating clean shutdown.\n");
     shutdown_active = 1;
-    printf("Shutdown pointer %p\n", &shutdown_active);
 }
 
-// /*
-//  * function add_request(): add a request_t to the requests list
-//  * algorithm: creates a request_t structure, adds to the list, and
-//  *            increases number of pending requests by one.
-//  * input:     request_t number, linked list mutex.
-//  * output:    none.
-//  */
-// void add_request(int new_fd, pthread_mutex_t *p_mutex,
-//                  pthread_cond_t *p_cond_var) {
-//     // int rc;                    /* return code of pthreads functions.  */
-//     Request *a_request; /* pointer to newly added request_t.     */
+/*
+ * function add_request(): add a request_t to the requests list
+ * algorithm: creates a request_t structure, adds to the list, and
+ *            increases number of pending requests by one.
+ * input:     request_t number, linked list mutex.
+ * output:    none.
+ */
+void add_request(int new_fd, pthread_mutex_t *p_mutex,
+                 pthread_cond_t *p_cond_var) {
+    // int rc;                    /* return code of pthreads functions.  */
+    Request *a_request; /* pointer to newly added request_t.     */
 
-//     /* create structure with new request_t */
-//     a_request = malloc(sizeof(Request));
-//     if (!a_request) { /* malloc failed?? */
-//         fprintf(stderr, "add_request: out of memory\n");
-//         exit(1);
-//     }
-//     a_request->new_fd = new_fd;
-//     a_request->next = NULL;
+    /* create structure with new request_t */
+    a_request = malloc(sizeof(Request));
+    a_request->new_fd = new_fd;
+    a_request->next = NULL;
 
-//     /* lock the mutex, to assure exclusive access to the list */
-//     pthread_mutex_lock(p_mutex);
+    /* lock the mutex, to assure exclusive access to the list */
+    pthread_mutex_lock(p_mutex);
 
-//     /* add new request_t to the end of the list, updating list */
-//     /* pointers as required */
-//     if (num_requests == 0) { /* special case - list is empty */
-//         requests = a_request;
-//         last_request = a_request;
-//     } else {
-//         last_request->next = a_request;
-//         last_request = a_request;
-//     }
+    /* add new request_t to the end of the list, updating list */
+    /* pointers as required */
+    if (num_requests == 0) { /* special case - list is empty */
+        requests = a_request;
+        last_request = a_request;
+    } else {
+        last_request->next = a_request;
+        last_request = a_request;
+    }
 
-//     /* increase total number of pending requests by one. */
-//     num_requests++;
+    /* increase total number of pending requests by one. */
+    num_requests++;
 
-//     /* unlock mutex */
-//     pthread_mutex_unlock(p_mutex);
+    /* unlock mutex */
+    pthread_mutex_unlock(p_mutex);
 
-//     /* signal the condition variable - there's a new request_t to handle */
-//     pthread_cond_signal(p_cond_var);
-// }
+    /* signal the condition variable - there's a new request_t to handle */
+    pthread_cond_signal(p_cond_var);
+}
 
-// /*
-//  * function get_request(): gets the first pending request_t from the requests
-//  * list removing it from the list. algorithm: creates a request_t structure,
-//  * adds to the list, and increases number of pending requests by one. input:
-//  * request_t number, linked list mutex. output:    pointer to the removed
-//  * request_t, or NULL if none. memory:    the returned request_t need to be
-//  * freed by the caller.
-//  */
-// Request *get_request(pthread_mutex_t *p_mutex) {
-//     // int rc;                    /* return code of pthreads functions.  */
-//     Request *a_request; /* pointer to request_t.                 */
+/*
+ * function get_request(): gets the first pending request_t from the requests
+ * list removing it from the list. algorithm: creates a request_t structure,
+ * adds to the list, and increases number of pending requests by one. input:
+ * request_t number, linked list mutex. output:    pointer to the removed
+ * request_t, or NULL if none. memory:    the returned request_t need to be
+ * freed by the caller.
+ */
+Request *get_request(pthread_mutex_t *p_mutex) {
+    // int rc;                    /* return code of pthreads functions.  */
+    Request *a_request; /* pointer to request_t.                 */
 
-//     /* lock the mutex, to assure exclusive access to the list */
-//     pthread_mutex_lock(p_mutex);
+    /* lock the mutex, to assure exclusive access to the list */
+    pthread_mutex_lock(p_mutex);
 
-//     if (num_requests > 0) {
-//         a_request = requests;
-//         requests = a_request->next;
-//         if (requests == NULL) { /* this was the last request_t on the list */
-//             last_request = NULL;
-//         }
-//         /* decrease the total number of pending requests */
-//         num_requests--;
-//     } else { /* requests list is empty */
-//         a_request = NULL;
-//     }
+    if (num_requests > 0) {
+        a_request = requests;
+        requests = a_request->next;
+        if (requests == NULL) { /* this was the last request_t on the list */
+            last_request = NULL;
+        }
+        /* decrease the total number of pending requests */
+        num_requests--;
+    } else { /* requests list is empty */
+        a_request = NULL;
+    }
 
-//     /* unlock mutex */
-//     pthread_mutex_unlock(p_mutex);
+    /* unlock mutex */
+    pthread_mutex_unlock(p_mutex);
 
-//     /* return the request_t to the caller. */
-//     return a_request;
-// }
+    /* return the request_t to the caller. */
+    return a_request;
+}
 
-// void handle_request(Request *a_request, int thread_id) {
-//     int new_fd = a_request->new_fd;
-//     printf("Thread %d: Created thread for new game.\n", thread_id);
+int read_helper(int fd, void *buff, size_t len) {
+    fd_set init_select;
+    while (!shutdown_active) {
+        FD_ZERO(&init_select);
+        FD_SET(fd, &init_select);
+        select(fd + 1, &init_select, NULL, NULL, &tv);
+        if (FD_ISSET(fd, &init_select)) {
+            if (recv(fd, buff, len, 0) == -1) {
+                perror("Couldn't receive client selection.");
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
 
-//     Login *current_login = authenticate_access(new_fd, head);
+void handle_request(Request *a_request, int thread_id) {
+    int new_fd = a_request->new_fd;
+    printf("Thread %d: Handling new game.\n", thread_id);
 
-//     if (current_login != NULL) {
-//         while (1) {
-//             int selection;
-//             if (recv(new_fd, &selection, sizeof(selection), 0) == -1) {
-//                 perror("Couldn't receive client selection.");
-//             }
+    Login *current_login = authenticate_access(new_fd, head, thread_id);
+    if (current_login == NULL) {
+        printf("Thread %d: Login failed.\n", thread_id);
+        return;
+    } else {
+        printf("Thread %d: %s authenticated.\n", thread_id,
+               current_login->username);
+    }
 
-//             if (selection == 1) {
-//                 long int start, end;
-//                 time(&start);
-//                 int game_result = play_minesweeper(new_fd);
-//                 time(&end);
-//                 current_login->games_played++;
+    int selection;
+    do {
+        if (read_helper(new_fd, &selection, sizeof(selection))) {
+            if (selection == 1) {
+                long int start, end;
+                time(&start);
+                int game_result = play_minesweeper(new_fd, thread_id);
+                time(&end);
+                current_login->games_played++;
 
-//                 if (game_result == GAME_WON) {
-//                     current_login->games_won++;
+                if (game_result == GAME_WON) {
+                    current_login->games_won++;
 
-//                     Score *score = malloc(sizeof(Score));
-//                     score->user = current_login;
-//                     score->duration = end - start;
+                    Score *score = malloc(sizeof(Score));
+                    score->user = current_login;
+                    score->duration = end - start;
 
-//                     // need a mutex here
-//                     pthread_mutex_lock(&write_mutex);
-//                     insert_score(&best, score);
-//                     pthread_mutex_unlock(&write_mutex);
-//                 }
-//             } else if (selection == 2) {
-//                 pthread_mutex_lock(&read_mutex);
-//                 reader_count++;
-//                 if (reader_count == 1) {
-//                     pthread_mutex_lock(&write_mutex);
-//                 }
+                    // need a mutex here
+                    pthread_mutex_lock(&write_mutex);
+                    insert_score(&best, score);
+                    pthread_mutex_unlock(&write_mutex);
+                }
+            } else if (selection == 2) {
+                pthread_mutex_lock(&read_mutex);
+                reader_count++;
+                if (reader_count == 1) {
+                    pthread_mutex_lock(&write_mutex);
+                }
 
-//                 pthread_mutex_unlock(&read_mutex);
+                pthread_mutex_unlock(&read_mutex);
 
-//                 send_highscore_data(best, new_fd);
+                send_highscore_data(best, new_fd);
 
-//                 pthread_mutex_lock(&read_mutex);
-//                 reader_count--;
+                pthread_mutex_lock(&read_mutex);
+                reader_count--;
 
-//                 if (reader_count == 0) {
-//                     pthread_mutex_unlock(&write_mutex);
-//                 }
-//                 pthread_mutex_unlock(&read_mutex);
+                if (reader_count == 0) {
+                    pthread_mutex_unlock(&write_mutex);
+                }
+                pthread_mutex_unlock(&read_mutex);
+            }
+        } else {
+            break;
+        }
+    } while (selection != 3);
 
-//             } else if (selection == 3) {
-//                 break;
-//             }
-//         }
-//     }
+    // Quitting game
+    close(new_fd);
+    printf("Thread %d: Closing client connection and returning back to pool.\n",
+           thread_id);
+}
 
-//     // Quitting game
-//     printf("Closing connection and exiting child process\n");
-//     // close(new_fd);
-//     // exit(0);
+/*
+ * function handle_requests_loop(): infinite loop of requests handling
+ * algorithm: forever, if there are requests to handle, take the first
+ *            and handle it. Then wait on the given condition variable,
+ *            and when it is signaled, re-do the loop.
+ *            increases number of pending requests by one.
+ * input:     id of thread, for printing purposes.
+ * output:    none.
+ */
+void *handle_requests_loop(void *data) {
+    Request *a_request;             /* pointer to a request_t. */
+    int thread_id = *((int *)data); /* thread identifying number           */
 
-//     // close(new_fd); /* parent doesn't need this */
-// }
+    /* lock the mutex, to access the requests list exclusively. */
+    pthread_mutex_lock(&request_mutex);
 
-// /*
-//  * function handle_requests_loop(): infinite loop of requests handling
-//  * algorithm: forever, if there are requests to handle, take the first
-//  *            and handle it. Then wait on the given condition variable,
-//  *            and when it is signaled, re-do the loop.
-//  *            increases number of pending requests by one.
-//  * input:     id of thread, for printing purposes.
-//  * output:    none.
-//  */
-// void *handle_requests_loop(void *data) {
-//     Request *a_request;             /* pointer to a request_t. */ int
-//     thread_id = *((int *)data); /* thread identifying number           */
+    /* do forever.... */
+    while (!shutdown_active) {
+        a_request = get_request(&request_mutex);
+        if (a_request) { /* got a request_t - handle it and free it */
+            /* unlock mutex - so other threads would be able to handle */
+            /* other reqeusts waiting in the queue paralelly.          */
+            pthread_mutex_unlock(&request_mutex);
 
-//     /* lock the mutex, to access the requests list exclusively. */
-//     pthread_mutex_lock(&request_mutex);
+            handle_request(a_request, thread_id);
+            free(a_request);
+            /* and lock the mutex again. */
+            pthread_mutex_lock(&request_mutex);
 
-//     /* do forever.... */
-//     while (1) {
-//         if (num_requests > 0) { /* a request_t is pending */
-//             a_request = get_request(&request_mutex);
-//             if (a_request) { /* got a request_t - handle it and free it */
-//                 /* unlock mutex - so other threads would be able to handle */
-//                 /* other reqeusts waiting in the queue paralelly.          */
-//                 pthread_mutex_unlock(&request_mutex);
-//                 handle_request(a_request, thread_id);
-//                 free(a_request);
-//                 /* and lock the mutex again. */
-//                 pthread_mutex_lock(&request_mutex);
-//             }
-//         } else {
-//             /* wait for a request_t to arrive. note the mutex will be */
-//             /* unlocked here, thus allowing other threads access to */
-//             /* requests list.                                       */
+        } else {
+            /* wait for a request_t to arrive. note the mutex will be */
+            /* unlocked here, thus allowing other threads access to */
+            /* requests list.                                       */
+            printf("Thread %d: Waiting for request...\n", thread_id);
+            pthread_cond_wait(&got_request, &request_mutex);
+            /* and after we return from pthread_cond_wait, the mutex  */
+            /* is locked again, so we don't need to lock it ourselves */
+            pthread_mutex_unlock(&request_mutex);
+        }
+    }
 
-//             pthread_cond_wait(&got_request, &request_mutex);
-//             /* and after we return from pthread_cond_wait, the mutex  */
-//             /* is locked again, so we don't need to lock it ourselves */
-//         }
-//     }
-// }
+    // pthread_cond_broadcast(&got_request);
+    printf("Thread %d: Exiting\n", thread_id);
+    pthread_exit(0);
+}
 
-// void send_highscore_data(Score *head, int new_fd) {
-//     Score *node = head;
-//     int response_type;
-//     if (node == NULL) {
-//         response_type = HIGHSCORES_EMPTY;
-//     } else {
-//         response_type = HIGHSCORES_PRESENT;
-//     }
+void send_highscore_data(Score *head, int new_fd) {
+    Score *node = head;
+    int response_type;
+    if (node == NULL) {
+        response_type = HIGHSCORES_EMPTY;
+    } else {
+        response_type = HIGHSCORES_PRESENT;
+    }
 
-//     send(new_fd, &response_type, sizeof(response_type), 0);
+    send(new_fd, &response_type, sizeof(response_type), 0);
 
-//     while (node != NULL) {
-//         send(new_fd, node->user->username, sizeof(node->user->username), 0);
-//         send(new_fd, &(node->duration), sizeof(node->duration), 0);
-//         send(new_fd, &(node->user->games_won), sizeof(node->user->games_won),
-//              0);
-//         send(new_fd, &(node->user->games_played),
-//              sizeof(node->user->games_played), 0);
+    while (node != NULL) {
+        send(new_fd, node->user->username, sizeof(node->user->username), 0);
+        send(new_fd, &(node->duration), sizeof(node->duration), 0);
+        send(new_fd, &(node->user->games_won), sizeof(node->user->games_won),
+             0);
+        send(new_fd, &(node->user->games_played),
+             sizeof(node->user->games_played), 0);
 
-//         int entries_left;
-//         if (node->next == NULL) {
-//             entries_left = HIGHSCORES_END;
-//         } else {
-//             entries_left = HIGHSCORES_PRESENT;
-//         }
-//         send(new_fd, &entries_left, sizeof(entries_left), 0);
+        int entries_left;
+        if (node->next == NULL) {
+            entries_left = HIGHSCORES_END;
+        } else {
+            entries_left = HIGHSCORES_PRESENT;
+        }
+        send(new_fd, &entries_left, sizeof(entries_left), 0);
 
-//         node = node->next;
-//     }
-// }
+        node = node->next;
+    }
+}
 
-// void insert_score(Score **head, Score *new) {
-//     Score *prev = NULL;
-//     Score *node = *head;
-//     while (1) {
-//         if (node == NULL || new->duration > node->duration ||
-//             (new->duration == node->duration &&
-//              new->user->games_won < node->user->games_won) ||
-//             (new->duration == node->duration &&
-//              new->user->games_won ==
-//                  node->user->games_won &&strcmp(new->user->username,
-//                                                 node->user->username) < 0)) {
-//             if (prev == NULL) {
-//                 *head = new;
-//             } else {
-//                 prev->next = new;
-//             }
-//             new->next = node;
-//             return;
-//         }
+void insert_score(Score **head, Score *new) {
+    Score *prev = NULL;
+    Score *node = *head;
+    while (1) {
+        if (node == NULL || new->duration > node->duration ||
+            (new->duration == node->duration &&
+             new->user->games_won < node->user->games_won) ||
+            (new->duration == node->duration &&
+             new->user->games_won ==
+                 node->user->games_won &&strcmp(new->user->username,
+                                                node->user->username) < 0)) {
+            if (prev == NULL) {
+                *head = new;
+            } else {
+                prev->next = new;
+            }
+            new->next = node;
+            return;
+        }
 
-//         prev = node;
-//         node = node->next;
-//     }
-// }
+        prev = node;
+        node = node->next;
+    }
+}
 
-// void setup_login_information(Login **head_address) {
-//     FILE *login_file = fopen("Authentication.txt", "r");
-//     if (!login_file) {
-//         exit(1);
-//     }
+void setup_login_information(Login **head_address) {
+    FILE *login_file = fopen("Authentication.txt", "r");
+    if (!login_file) {
+        exit(1);
+    }
 
-//     Login *prev = *head_address;
-//     while (1) {
-//         Login *curr_node = malloc(sizeof(Login));
+    Login *prev = *head_address;
+    while (1) {
+        Login *curr_node = malloc(sizeof(Login));
 
-//         if (fscanf(login_file, "%s %s", curr_node->username,
-//                    curr_node->password) != 2) {
-//             free(curr_node);
-//             break;
-//         };
+        if (fscanf(login_file, "%s %s", curr_node->username,
+                   curr_node->password) != 2) {
+            free(curr_node);
+            break;
+        };
 
-//         curr_node->games_played = 0;
-//         curr_node->games_won = 0;
+        curr_node->games_played = 0;
+        curr_node->games_won = 0;
 
-//         if (*head_address == NULL) {
-//             *head_address = curr_node;
-//         } else {
-//             prev->next = curr_node;
-//         }
-//         prev = curr_node;
-//     }
-//     fclose(login_file);
-//     // Throwing away the first entry that contains headers from file
-//     *head_address = (*head_address)->next;
-// }
+        if (*head_address == NULL) {
+            *head_address = curr_node;
+        } else {
+            prev->next = curr_node;
+        }
+        prev = curr_node;
+    }
+    fclose(login_file);
+    // Throwing away the first entry that contains column headers from file
+    *head_address = (*head_address)->next;
+}
 
-// int play_minesweeper(int new_fd) {
-//     GameState *game = malloc(sizeof(GameState));
+int play_minesweeper(int new_fd, int thread_id) {
+    GameState game;
 
-//     initialise_game(game);
-//     send(new_fd, game, sizeof(GameState), 0);
+    initialise_game(&game);
+    send(new_fd, &game, sizeof(GameState), 0);
 
-//     char row, option;
-//     int column;
-//     do {
-//         recv(new_fd, &option, sizeof(option), 0);
-//         if (option == 'Q') {
-//             break;
-//         }
+    char row, option;
+    int column;
+    if (read_helper(new_fd, &option, sizeof(option))) {
+        if (option != 'Q') {
+            if (read_helper(new_fd, &row, sizeof(row))) {
+                if (read_helper(new_fd, &column, sizeof(column))) {
+                    int response;
+                    if (option == 'R') {
+                        response = search_tiles(&game, row - 'A', column - 1);
+                    } else if (option == 'P') {
+                        response = place_flag(&game, row - 'A', column - 1);
+                    }
 
-//         recv(new_fd, &row, sizeof(row), 0);
-//         recv(new_fd, &column, sizeof(column), 0);
+                    send(new_fd, &response, sizeof(response), 0);
+                    send(new_fd, &game, sizeof(GameState), 0);
 
-//         int response;
-//         if (option == 'R') {
-//             response = search_tiles(game, row - 'A', column - 1);
-//         } else if (option == 'P') {
-//             response = place_flag(game, row - 'A', column - 1);
-//         }
+                    if (response == GAME_WON || response == GAME_LOST) {
+                        return response;
+                    }
+                }
+            }
+        }
+    }
 
-//         send(new_fd, &response, sizeof(response), 0);
-//         send(new_fd, game, sizeof(GameState), 0);
+    printf("Thread %d: Leaving mid-game due to shutdown or quit.\n", thread_id);
+    return -1;
+}
 
-//         if (response == GAME_WON) {
-//             free(game);
-//             return GAME_WON;
-//         }
-//     } while (!game->game_over);
-//     free(game);
-//     return 1;
-// }
+Login *check_details(Login *head, char *usr, char *pwd) {
+    Login *curr_node = head;
+    while (curr_node->next != NULL) {
+        if (strcmp(curr_node->username, usr) == 0 &&
+            strcmp(curr_node->password, pwd) == 0) {
+            return curr_node;
+        }
+        curr_node = curr_node->next;
+    }
+    return NULL;
+}
 
-// Login *check_details(Login *head, char *usr, char *pwd) {
-//     Login *curr_node = head;
-//     while (curr_node->next != NULL) {
-//         if (strcmp(curr_node->username, usr) == 0 &&
-//             strcmp(curr_node->password, pwd) == 0) {
-//             return curr_node;
-//         }
-//         curr_node = curr_node->next;
-//     }
-//     return NULL;
-// }
+Login *authenticate_access(int new_fd, Login *access_list, int thread_id) {
+    char usr[MAX_READ_LENGTH];
+    char pwd[MAX_READ_LENGTH];
 
-// Login *authenticate_access(int new_fd, Login *access_list) {
-//     char usr[MAX_READ_LENGTH];
-//     char pwd[MAX_READ_LENGTH];
-//     if (recv(new_fd, usr, MAX_READ_LENGTH, 0) == -1) {
-//         perror("Couldn't receive username.");
-//     };
-//     if (recv(new_fd, pwd, MAX_READ_LENGTH, 0) == -1) {
-//         perror("Couldn't receive password.");
-//     };
+    if (read_helper(new_fd, &usr, MAX_READ_LENGTH)) {
+        if (read_helper(new_fd, &pwd, MAX_READ_LENGTH)) {
+            Login *auth_login = check_details(access_list, usr, pwd);
+            int auth_val;
+            if (auth_login == NULL) {
+                auth_val = 0;
+            } else {
+                auth_val = 1;
+            }
+            if (send(new_fd, &auth_val, sizeof(auth_val), 0) == -1) {
+                perror("Couldn't send authorisation.");
+            }
+            return auth_login;
+        }
+    }
 
-//     Login *auth_login = check_details(access_list, usr, pwd);
-//     int auth_val;
-//     if (auth_login == NULL) {
-//         auth_val = 0;
-//     } else {
-//         auth_val = 1;
-//     }
-//     if (send(new_fd, &auth_val, sizeof(auth_val), 0) == -1) {
-//         perror("Couldn't send authorisation.");
-//     }
-//     return auth_login;
-// }
+    printf("Thread %d: Left login due to shutdown.\n", thread_id);
+    return NULL;
+}
 
 int setup_server_connection(int port_no) {
     int sockfd; /* listen on sock_fd, new connection on new_fd */

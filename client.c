@@ -52,8 +52,8 @@ void core_loop(int sockfd) {
 }
 
 void play_minesweeper(int sockfd) {
-    GameState *game = malloc(sizeof(GameState));
-    update_game_state(game, sockfd);
+    GameState game;
+    update_game_state(&game, sockfd);
     while (1) {
         char option = select_game_action();
         send(sockfd, &option, sizeof(option), 0);
@@ -67,14 +67,13 @@ void play_minesweeper(int sockfd) {
         int response;
         recv(sockfd, &response, sizeof(response), 0);
 
-        update_game_state(game, sockfd);
+        update_game_state(&game, sockfd);
         print_response_output(response);
 
         if (response == GAME_LOST || response == GAME_WON) {
             break;
         }
     };
-    free(game);
 }
 
 void show_leaderboard(int sockfd) {
