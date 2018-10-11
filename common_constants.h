@@ -1,5 +1,5 @@
 #define MAX_READ_LENGTH 20
-#define BACKLOG 10
+#define BACKLOG 50
 
 #define NORMAL 1
 #define GAME_LOST 2
