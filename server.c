@@ -3,13 +3,13 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <semaphore.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-//#include <sys/types.h>
+
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -20,7 +20,7 @@
 #include "minesweeper_logic.h"
 
 /* number of threads used to service requests */
-#define NUM_HANDLER_THREADS 10
+#define NUM_HANDLER_THREADS 2
 
 #define RANDOM_NUMBER_SEED 42
 
@@ -231,6 +231,8 @@ int read_helper(int fd, void *buff, size_t len) {
 
 void handle_request(Request *a_request, int thread_id) {
     int new_fd = a_request->new_fd;
+    int connection_made = 1;
+    send(new_fd, &connection_made, sizeof(connection_made), 0);
     printf("Thread %d: Handling new game.\n", thread_id);
 
     Login *current_login = authenticate_access(new_fd, head, thread_id);
@@ -258,7 +260,8 @@ void handle_request(Request *a_request, int thread_id) {
                     Score *score = malloc(sizeof(Score));
                     score->user = current_login;
                     score->duration = end - start;
-
+                    send(new_fd, &(score->duration), sizeof(score->duration),
+                         0);
                     // need a mutex here
                     pthread_mutex_lock(&write_mutex);
                     insert_score(&best, score);
@@ -334,7 +337,6 @@ void *handle_requests_loop(void *data) {
         }
     }
 
-    // pthread_cond_broadcast(&got_request);
     printf("Thread %d: Exiting\n", thread_id);
     pthread_mutex_unlock(&request_mutex);
 
