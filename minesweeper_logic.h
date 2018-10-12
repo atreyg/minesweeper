@@ -6,6 +6,7 @@
 #define NUM_TILES_Y 9
 #define NUM_MINES 10
 
+//structure representing an individual tile on the game board
 typedef struct tile_struct {
     int adjacent_mines;
     bool revealed;
@@ -13,6 +14,7 @@ typedef struct tile_struct {
     bool flagged;
 } Tile;
 
+//structure representing the state of a particular game
 typedef struct game_struct {
     int mines_left;
     Tile tiles[NUM_TILES_X][NUM_TILES_Y];
