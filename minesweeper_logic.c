@@ -70,7 +70,12 @@ int place_flag(GameState *game, int row, int column) {
             tile->flagged = true;
             game->mines_left--;
 
-            return check_winning_condition(game);
+            if (game->mines_left == 0) {
+                update_end_board(game, GAME_WON);
+                return GAME_WON;
+            }
+
+            return NORMAL;
         } else {
             return NO_MINE_AT_FLAG;
         }
@@ -79,11 +84,20 @@ int place_flag(GameState *game, int row, int column) {
     return INVALID_COORDINATES;
 }
 
-int check_winning_condition(GameState *game) {
-    if (game->mines_left == 0) {
-        return GAME_WON;
+void update_end_board(GameState *game, int state) {
+    for (int row = 0; row < NUM_TILES_Y; row++) {
+        for (int column = 0; column < NUM_TILES_X; column++) {
+            Tile *tile = &game->tiles[row][column];
+
+            if (tile->is_mine) {
+                tile->revealed = true;
+            } else if (state == GAME_WON) {
+                tile->revealed = true;
+            } else if (state == GAME_LOST) {
+                tile->revealed = false;
+            }
+        }
     }
-    return NORMAL;
 }
 
 int search_tiles(GameState *game, int row, int column) {
@@ -94,29 +108,14 @@ int search_tiles(GameState *game, int row, int column) {
             return TILE_ALREADY_REVEALED;
         } else if (tile->is_mine) {
             tile->revealed = true;
-            return game_over(game);
+            update_end_board(game, GAME_LOST);
+            return GAME_LOST;
         } else {
             reveal_tile(game, row, column);
         }
         return NORMAL;
     }
     return INVALID_COORDINATES;
-}
-
-int game_over(GameState *game) {
-    for (int row = 0; row < NUM_TILES_Y; row++) {
-        for (int column = 0; column < NUM_TILES_X; column++) {
-            Tile *tile = &game->tiles[row][column];
-
-            if (tile->is_mine) {
-                tile->revealed = true;
-            } else if (tile->revealed) {
-                tile->revealed = false;
-            }
-        }
-    }
-
-    return GAME_LOST;
 }
 
 void print_game_state(GameState *game) {

@@ -23,7 +23,6 @@ void place_mines(GameState *game);
 void increase_number_of_adjacent_mines(GameState *game, int row, int column);
 void reveal_tile(GameState *game, int row, int column);
 int place_flag(GameState *game, int row, int column);
-int check_winning_condition(GameState *game);
 int search_tiles(GameState *game, int row, int column);
-int game_over(GameState *game);
 void print_game_state(GameState *game);
+void update_end_board(GameState *game, int state);

@@ -289,7 +289,12 @@ void play_minesweeper(int sockfd) {
  * output: none.
  */
 void update_game_state(GameState *game, int sockfd) {
-    recv(sockfd, game, sizeof(GameState), 0);
+    for (int row = 0; row < NUM_TILES_Y; row++) {
+        for (int column = 0; column < NUM_TILES_X; column++) {
+            recv(sockfd, &game->tiles[row][column], sizeof(Tile), 0);
+        }
+    }
+    recv(sockfd, &game->mines_left, sizeof(game->mines_left), 0);
     print_game_state(game);
 }
 

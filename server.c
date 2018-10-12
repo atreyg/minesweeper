@@ -15,9 +15,8 @@
 #include <unistd.h>
 
 #include "common_constants.h"
-#include "server.h"
-
 #include "minesweeper_logic.h"
+#include "server.h"
 
 #define RANDOM_NUMBER_SEED 42
 
@@ -308,7 +307,7 @@ void *handle_requests_loop(void *data) {
     // Loop forever as long as shutdown hasnt been activated
     while (!shutdown_active) {
         // Get a request from the list
-        a_request = get_request(&request_mutex);
+        a_request = get_request();
 
         // If a request was pending
         if (a_request) {
@@ -321,7 +320,6 @@ void *handle_requests_loop(void *data) {
 
             // Lock the mutex again as it will try to get a request again
             pthread_mutex_lock(&request_mutex);
-
         } else {
             printf("Thread %d: Waiting for request...\n", thread_id);
             // Block on the condition variable, unlocking the mutex.
@@ -344,11 +342,8 @@ void *handle_requests_loop(void *data) {
  * input: linked list mutex.
  * output: pointer to the requestr, or NULL if none.
  */
-Request *get_request(pthread_mutex_t *p_mutex) {
+Request *get_request() {
     Request *a_request;
-
-    // Lock the mutex, to assure exclusive access to the list
-    pthread_mutex_lock(p_mutex);
 
     // Get the top value of the requests list
     a_request = requests;
@@ -357,19 +352,19 @@ Request *get_request(pthread_mutex_t *p_mutex) {
         requests = a_request->next;
     }
 
-    // Unlock mutex
-    pthread_mutex_unlock(p_mutex);
-
     return a_request;
 }
 
 void handle_request(Request *a_request, int thread_id) {
     int new_fd = a_request->new_fd;
+
     int connection_made = 1;
     send(new_fd, &connection_made, sizeof(connection_made), 0);
     printf("Thread %d: Handling new game.\n", thread_id);
+    int client_connected = 1;
 
-    Login *current_login = authenticate_access(new_fd, head, thread_id);
+    Login *current_login =
+        authenticate_access(new_fd, head, thread_id, &client_connected);
     if (current_login == NULL) {
         printf("Thread %d: Login failed.\n", thread_id);
         return;
@@ -379,12 +374,14 @@ void handle_request(Request *a_request, int thread_id) {
     }
 
     int selection;
-    while (!shutdown_active) {
-        if (read_helper(new_fd, &selection, sizeof(selection))) {
+    while (!shutdown_active && client_connected) {
+        if (read_helper(new_fd, &selection, sizeof(selection),
+                        &client_connected)) {
             if (selection == 1) {
                 long int start, end;
                 time(&start);
-                int game_result = play_minesweeper(new_fd, thread_id);
+                int game_result =
+                    play_minesweeper(new_fd, thread_id, &client_connected);
                 time(&end);
                 current_login->games_played++;
 
@@ -431,15 +428,18 @@ void handle_request(Request *a_request, int thread_id) {
            thread_id);
 }
 
-int read_helper(int fd, void *buff, size_t len) {
+int read_helper(int fd, void *buff, size_t len, int *client_connected) {
     fd_set init_select;
     while (!shutdown_active) {
         FD_ZERO(&init_select);
         FD_SET(fd, &init_select);
-        select(fd + 1, &init_select, NULL, NULL, &tv);
+        if (select(fd + 1, &init_select, NULL, NULL, &tv) <= 0) {
+            continue;
+        };
         if (FD_ISSET(fd, &init_select)) {
-            if (recv(fd, buff, len, 0) == -1) {
-                perror("Couldn't receive client selection.");
+            if (recv(fd, buff, len, 0) <= 0) {
+                perror("Client ended connection");
+                *client_connected = 0;
             }
             return 1;
         }
@@ -503,22 +503,22 @@ void insert_score(Score **head, Score *new) {
     }
 }
 
-int play_minesweeper(int new_fd, int thread_id) {
+int play_minesweeper(int new_fd, int thread_id, int *client_connected) {
     GameState game;
 
     initialise_game(&game);
-    send(new_fd, &game, sizeof(GameState), 0);
-
+    send_revealed_game(&game, new_fd);
     char row, option;
     int column;
-    while (!shutdown_active) {
-        if (read_helper(new_fd, &option, sizeof(option))) {
+    while (!shutdown_active && client_connected) {
+        if (read_helper(new_fd, &option, sizeof(option), client_connected)) {
             if (option == 'Q') {
                 break;
             }
 
-            if (read_helper(new_fd, &row, sizeof(row))) {
-                if (read_helper(new_fd, &column, sizeof(column))) {
+            if (read_helper(new_fd, &row, sizeof(row), client_connected)) {
+                if (read_helper(new_fd, &column, sizeof(column),
+                                client_connected)) {
                     int response;
                     if (option == 'R') {
                         response = search_tiles(&game, row - 'A', column - 1);
@@ -527,7 +527,8 @@ int play_minesweeper(int new_fd, int thread_id) {
                     }
 
                     send(new_fd, &response, sizeof(response), 0);
-                    send(new_fd, &game, sizeof(GameState), 0);
+
+                    send_revealed_game(&game, new_fd);
 
                     if (response == GAME_WON || response == GAME_LOST) {
                         return response;
@@ -539,6 +540,29 @@ int play_minesweeper(int new_fd, int thread_id) {
 
     printf("Thread %d: Leaving mid-game due to shutdown or quit.\n", thread_id);
     return -1;
+}
+
+void send_revealed_game(GameState *game, int new_fd) {
+    Tile unrevealed_tile;
+    unrevealed_tile.revealed = 0;
+
+    for (int row = 0; row < NUM_TILES_Y; row++) {
+        for (int column = 0; column < NUM_TILES_X; column++) {
+            Tile *tile = &game->tiles[row][column];
+
+            if (tile->revealed) {
+                send(new_fd, tile, sizeof(Tile), 0);
+            } else {
+                if (tile->flagged) {
+                    unrevealed_tile.flagged = 1;
+                } else {
+                    unrevealed_tile.flagged = 0;
+                }
+                send(new_fd, &unrevealed_tile, sizeof(Tile), 0);
+            }
+        }
+    }
+    send(new_fd, &game->mines_left, sizeof(game->mines_left), 0);
 }
 
 Login *check_details(Login *head, char *usr, char *pwd) {
@@ -553,12 +577,13 @@ Login *check_details(Login *head, char *usr, char *pwd) {
     return NULL;
 }
 
-Login *authenticate_access(int new_fd, Login *access_list, int thread_id) {
+Login *authenticate_access(int new_fd, Login *access_list, int thread_id,
+                           int *client_connected) {
     char usr[MAX_READ_LENGTH];
     char pwd[MAX_READ_LENGTH];
 
-    if (read_helper(new_fd, &usr, MAX_READ_LENGTH)) {
-        if (read_helper(new_fd, &pwd, MAX_READ_LENGTH)) {
+    if (read_helper(new_fd, &usr, MAX_READ_LENGTH, client_connected)) {
+        if (read_helper(new_fd, &pwd, MAX_READ_LENGTH, client_connected)) {
             Login *auth_login = check_details(access_list, usr, pwd);
             int auth_val;
             if (auth_login == NULL) {
