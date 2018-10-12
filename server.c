@@ -82,20 +82,19 @@ int main(int argc, char *argv[]) {
     tv.tv_sec = 0;
     tv.tv_usec = 0;
 
-    // Create file descriptor set with sockfd
-    fd_set master;
-    FD_ZERO(&master);
-    FD_SET(sockfd, &master);
-    fd_set temp;
-
     // Loop continously while flag to shutdown hasnt been set
     while (!shutdown_active) {
-        // Reset temp set to master each loop
-        temp = master;
-        select(sockfd + 1, &temp, NULL, NULL, &tv);
+        // Create file descriptor set with sockfd
+        fd_set master;
+        FD_ZERO(&master);
+        FD_SET(sockfd, &master);
+
+        if (select(sockfd + 1, &master, NULL, NULL, &tv) <= 0) {
+            continue;
+        };
 
         // If connection is ready to accept on sockfd
-        if (FD_ISSET(sockfd, &temp)) {
+        if (FD_ISSET(sockfd, &master)) {
             // Variables to store new connection information
             int new_fd;
             struct sockaddr_in their_addr;
@@ -159,7 +158,7 @@ int setup_server_connection(int port_no) {
 
     // Allow port to be reused
     int yes = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) == -1) {
         perror("reuse addr");
         exit(1);
     }
