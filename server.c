@@ -21,7 +21,7 @@
 #define RANDOM_NUMBER_SEED 42
 
 // Allocate memory for threads
-#define NUM_HANDLER_THREADS 2
+#define NUM_HANDLER_THREADS 10
 int thr_id[NUM_HANDLER_THREADS];
 pthread_t p_threads[NUM_HANDLER_THREADS];
 
@@ -34,9 +34,9 @@ pthread_mutex_t read_mutex, write_mutex;
 int reader_count = 0;
 
 // Head to linked lists of structs: Score, Login, and Request respectively
-Score *best = NULL;
-Login *head = NULL;
-Request *requests = NULL;
+Score *score_head = NULL;
+Login *login_head = NULL;
+Request *request_head = NULL;
 
 // Time struct for polling select function
 struct timeval tv;
@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            // Add the new connection to the requests linked list
+            // Add the new connection to the request_head linked list
             add_request(new_fd, &request_mutex, &got_request);
         }
     }
@@ -190,7 +190,7 @@ int setup_server_connection(int port_no) {
  * function setup_login_information(): read txt file into global linked list
  * algorithm: Open the Authentication.txt file for reading. Create a login node
  *   for each entry in the file, and add it to the linked list.
- * input:     pointer to head of login linked list.
+ * input:     pointer to login_head of login linked list.
  * output:    none.
  */
 void setup_login_information() {
@@ -202,7 +202,7 @@ void setup_login_information() {
     }
 
     // Track the previous linked list entry
-    Login *prev = head;
+    Login *prev = login_head;
     while (1) {
         // Create login node
         Login *curr_node = malloc(sizeof(Login));
@@ -219,8 +219,8 @@ void setup_login_information() {
         curr_node->games_won = 0;
 
         // Add node to linked list
-        if (head == NULL) {
-            head = curr_node;
+        if (login_head == NULL) {
+            login_head = curr_node;
         } else {
             prev->next = curr_node;
         }
@@ -230,15 +230,14 @@ void setup_login_information() {
     // Close file
     fclose(login_file);
     // Throwing away the first entry that contains column headers from file
-    head = head->next;
+    login_head = login_head->next;
 }
 
 /*
- * function initialise_thread_pool(): execute all handler threads for requests
- * algorithm: loop through number of handler threads and execute them.
- *   Initialise the read and write mutexes as well.
- * input:     none.
- * output:    none.
+ * function initialise_thread_pool(): execute all handler threads for
+ * request_head algorithm: loop through number of handler threads and execute
+ * them. Initialise the read and write mutexes as well. input:     none. output:
+ * none.
  */
 void initialise_thread_pool() {
     // Loop through number of threads, and execute them in start routine
@@ -254,9 +253,9 @@ void initialise_thread_pool() {
 }
 
 /*
- * function add_request(): add a request to the requests linked list
+ * function add_request(): add a request to the request_head linked list
  * algorithm: creates a Request, adds to the list, and increases number
- *   of pending requests by one, and signal that there is a new request.
+ *   of pending request_head by one, and signal that there is a new request.
  * input:     request file descriptor, linked list mutex and cond variable.
  * output:    none.
  */
@@ -271,11 +270,11 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
     pthread_mutex_lock(p_mutex);
 
     // Add Request to the end of the linked list
-    if (requests == NULL) {
-        // Set new request as head if list is empty
-        requests = a_request;
+    if (request_head == NULL) {
+        // Set new request as login_head if list is empty
+        request_head = a_request;
     } else {
-        Request *last_request = requests;
+        Request *last_request = request_head;
         while (last_request->next != NULL) {
             last_request = last_request->next;
         }
@@ -290,8 +289,8 @@ void add_request(int new_fd, pthread_mutex_t *p_mutex,
 }
 
 /*
- * function handle_requests_loop(): infinite loop of requests handling
- * algorithm: forever, if there are requests to handle, take the first
+ * function handle_request_loop(): infinite loop of request_head handling
+ * algorithm: forever, if there are request_head to handle, take the first
  *            and handle it. Then wait on the given condition variable,
  *            and when it is signaled, re-do the loop.
  * input:     id of thread, for printing purposes.
@@ -301,7 +300,7 @@ void *handle_requests_loop(void *data) {
     Request *a_request;
     int thread_id = *((int *)data);
 
-    // Lock the mutex, to access the requests list exclusively.
+    // Lock the mutex, to access the request_head list exclusively.
     pthread_mutex_lock(&request_mutex);
 
     // Loop forever as long as shutdown hasnt been activated
@@ -311,7 +310,7 @@ void *handle_requests_loop(void *data) {
 
         // If a request was pending
         if (a_request) {
-            // Unlock mutex so other threads can handle other requests
+            // Unlock mutex so other threads can handle other request_head
             pthread_mutex_unlock(&request_mutex);
 
             // Handle the request, and free once handled
@@ -337,188 +336,177 @@ void *handle_requests_loop(void *data) {
 
 /*
  * function get_request(): gets the first pending request from the list
- * algorithm: creates a Request pointer and points it at the head of the
- *   requests list.
- * input: linked list mutex.
- * output: pointer to the requestr, or NULL if none.
+ * algorithm: creates a Request pointer and points it at the login_head of the
+ *   request_head list.
+ * input: none.
+ * output: pointer to the request, or NULL if none.
  */
 Request *get_request() {
     Request *a_request;
 
-    // Get the top value of the requests list
-    a_request = requests;
+    // Get the top value of the request_head list
+    a_request = request_head;
     // If the list was not empty, progress the list down one link
-    if (requests != NULL) {
-        requests = a_request->next;
+    if (request_head != NULL) {
+        request_head = a_request->next;
     }
 
     return a_request;
 }
 
+/*
+ * function handle_request(): use thread to process a client connection
+ * algorithm: get the file descriptor for client connection, authenticate user,
+ *   and begin selection loop
+ * input: pointer to Request, and thread id for logging.
+ * output: none.
+ */
 void handle_request(Request *a_request, int thread_id) {
+    // File descriptor for the request
     int new_fd = a_request->new_fd;
 
-    int connection_made = 1;
-    send(new_fd, &connection_made, sizeof(connection_made), 0);
+    // Unblock client that is waiting to be handled
+    int connected = 1;
+    send(new_fd, &connected, sizeof(connected), 0);
     printf("Thread %d: Handling new game.\n", thread_id);
-    int client_connected = 1;
 
-    Login *current_login =
-        authenticate_access(new_fd, head, thread_id, &client_connected);
-    if (current_login == NULL) {
-        printf("Thread %d: Login failed.\n", thread_id);
-        return;
-    } else {
-        printf("Thread %d: %s authenticated.\n", thread_id,
-               current_login->username);
-    }
+    // Get user login information or NULL if not authenticated,
+    Login *curr_login = auth_access(new_fd, thread_id, &connected);
 
-    int selection;
-    while (!shutdown_active && client_connected) {
-        if (read_helper(new_fd, &selection, sizeof(selection),
-                        &client_connected)) {
-            if (selection == 1) {
-                long int start, end;
-                time(&start);
-                int game_result =
-                    play_minesweeper(new_fd, thread_id, &client_connected);
-                time(&end);
-                current_login->games_played++;
+    if (curr_login != NULL) {
+        int selection;
 
-                if (game_result == GAME_WON) {
-                    current_login->games_won++;
-
-                    Score *score = malloc(sizeof(Score));
-                    score->user = current_login;
-                    score->duration = end - start;
-                    send(new_fd, &(score->duration), sizeof(score->duration),
-                         0);
-                    // need a mutex here
-                    pthread_mutex_lock(&write_mutex);
-                    insert_score(&best, score);
-                    pthread_mutex_unlock(&write_mutex);
+        // Loop until shutdown or client disconnect
+        while (!shutdown_active && connected) {
+            if (read_helper(new_fd, &selection, sizeof(selection),
+                            &connected)) {
+                // Call appropriate function from client selection
+                if (selection == 1) {
+                    minesweeper_selection(new_fd, thread_id, &connected,
+                                          curr_login);
+                } else if (selection == 2) {
+                    score_selection(new_fd);
+                } else if (selection == 3) {
+                    // Leave loop on client quit
+                    break;
                 }
-            } else if (selection == 2) {
-                pthread_mutex_lock(&read_mutex);
-                reader_count++;
-                if (reader_count == 1) {
-                    pthread_mutex_lock(&write_mutex);
-                }
-
-                pthread_mutex_unlock(&read_mutex);
-
-                send_highscore_data(best, new_fd);
-
-                pthread_mutex_lock(&read_mutex);
-                reader_count--;
-
-                if (reader_count == 0) {
-                    pthread_mutex_unlock(&write_mutex);
-                }
-                pthread_mutex_unlock(&read_mutex);
-            } else if (selection == 3) {
-                break;
             }
         }
     }
 
-    // Quitting game
+    // Quitting game: failed login, shutdown or client disconnect
     close(new_fd);
     printf("Thread %d: Closing client connection and returning back to pool.\n",
            thread_id);
 }
 
-int read_helper(int fd, void *buff, size_t len, int *client_connected) {
-    fd_set init_select;
-    while (!shutdown_active) {
-        FD_ZERO(&init_select);
-        FD_SET(fd, &init_select);
-        if (select(fd + 1, &init_select, NULL, NULL, &tv) <= 0) {
-            continue;
-        };
-        if (FD_ISSET(fd, &init_select)) {
-            if (recv(fd, buff, len, 0) <= 0) {
-                perror("Client ended connection");
-                *client_connected = 0;
+/*
+ * function auth_access(): authenticate the client
+ * algorithm: get the username and password strings from client,
+ *   and compare the values to the verified Login list
+ * input: socked file descriptor, thread id for logging, and connected flag
+ * output: pointer to client's Login or NULL if not authenticated.
+ */
+Login *auth_access(int new_fd, int thread_id, int *connected) {
+    char usr[MAX_READ_LENGTH];
+    char pwd[MAX_READ_LENGTH];
+
+    // Get user input for username and password without blocking
+    if (read_helper(new_fd, &usr, MAX_READ_LENGTH, connected)) {
+        if (read_helper(new_fd, &pwd, MAX_READ_LENGTH, connected)) {
+            // Default the authentication variables to 'unauthenticated'
+            int auth_val = 0;
+            Login *auth_login = NULL;
+
+            // Loop through the linked list
+            Login *curr_node = login_head;
+            while (curr_node->next != NULL) {
+                if (strcmp(curr_node->username, usr) == 0 &&
+                    strcmp(curr_node->password, pwd) == 0) {
+                    // If correct details, set variables to login values
+                    auth_val = 1;
+                    auth_login = curr_node;
+                    break;
+                }
+                curr_node = curr_node->next;
             }
-            return 1;
-        }
-    }
-    return 0;
-}
-
-void send_highscore_data(Score *head, int new_fd) {
-    Score *node = head;
-    int response_type;
-    if (node == NULL) {
-        response_type = HIGHSCORES_EMPTY;
-    } else {
-        response_type = HIGHSCORES_PRESENT;
-    }
-
-    send(new_fd, &response_type, sizeof(response_type), 0);
-
-    while (node != NULL) {
-        send(new_fd, node->user->username, sizeof(node->user->username), 0);
-        send(new_fd, &(node->duration), sizeof(node->duration), 0);
-        send(new_fd, &(node->user->games_won), sizeof(node->user->games_won),
-             0);
-        send(new_fd, &(node->user->games_played),
-             sizeof(node->user->games_played), 0);
-
-        int entries_left;
-        if (node->next == NULL) {
-            entries_left = HIGHSCORES_END;
-        } else {
-            entries_left = HIGHSCORES_PRESENT;
-        }
-        send(new_fd, &entries_left, sizeof(entries_left), 0);
-
-        node = node->next;
-    }
-}
-
-void insert_score(Score **head, Score *new) {
-    Score *prev = NULL;
-    Score *node = *head;
-    while (1) {
-        if (node == NULL || new->duration > node->duration ||
-            (new->duration == node->duration &&
-             new->user->games_won < node->user->games_won) ||
-            (new->duration == node->duration &&
-             new->user->games_won ==
-                 node->user->games_won &&strcmp(new->user->username,
-                                                node->user->username) < 0)) {
-            if (prev == NULL) {
-                *head = new;
-            } else {
-                prev->next = new;
+            // Send whether authentication was successful to client
+            if (send(new_fd, &auth_val, sizeof(auth_val), 0) == -1) {
+                perror("Couldn't send authorisation.");
             }
-            new->next = node;
-            return;
-        }
 
-        prev = node;
-        node = node->next;
+            return auth_login;
+        }
+    }
+
+    // Control only reaches here if unable to read values or server shutdown
+    printf("Thread %d: Left login due to shutdown or disconnect.\n", thread_id);
+    return NULL;
+}
+
+/*
+ * function minesweeper_selection(): process a minesweeper game selection
+ * algorithm: store start time for a game, play the game, compute the play time
+ *   , and if the game was won add the score to the scoreboard.
+ * input: socked file descriptor, thread id for logging, connected flag, and
+ *   login of current user
+ * output: none.
+ */
+void minesweeper_selection(int new_fd, int thread_id, int *connected,
+                           Login *login) {
+    // Track the time before, and after the game to compute duration
+    long int start, end;
+    time(&start);
+    int game_result = play_minesweeper(new_fd, thread_id, connected);
+    time(&end);
+
+    // Update user details about games played/won
+    login->games_played++;
+    if (game_result == GAME_WON) {
+        login->games_won++;
+
+        // Create a score struct with user and duration data
+        Score *score = malloc(sizeof(Score));
+        score->user = login;
+        score->duration = end - start;
+
+        // Send duration to client so player can view
+        send(new_fd, &(score->duration), sizeof(score->duration), 0);
+
+        // Mutexes to exclusively add a score to the list
+        pthread_mutex_lock(&write_mutex);
+        insert_score(score);
+        pthread_mutex_unlock(&write_mutex);
     }
 }
 
-int play_minesweeper(int new_fd, int thread_id, int *client_connected) {
+/*
+ * function play_minesweeper(): communicate with client to play game
+ * algorithm: Loop and get client input for game option. If game isnt quit,
+ *   get coordinates and place or reveal tile. Send server response code for
+ *   the processing, and send updated game state. Leave loop on game end or quit
+ * input: socked file descriptor, thread id for logging, connected flag.
+ * output: exit code of game (GAME_WON or GAME_LOST or -1).
+ */
+int play_minesweeper(int new_fd, int thread_id, int *connected) {
+    // Setup intial game state
     GameState game;
-
     initialise_game(&game);
     send_revealed_game(&game, new_fd);
+
     char row, option;
     int column;
-    while (!shutdown_active && client_connected) {
-        if (read_helper(new_fd, &option, sizeof(option), client_connected)) {
+    // Loop till shutdown or disconnect
+    while (!shutdown_active && connected) {
+        // Reads are nested to ensure data is received in order
+        if (read_helper(new_fd, &option, sizeof(option), connected)) {
+            // Leave loop on quit
             if (option == 'Q') {
                 break;
             }
 
-            if (read_helper(new_fd, &row, sizeof(row), client_connected)) {
-                if (read_helper(new_fd, &column, sizeof(column),
-                                client_connected)) {
+            if (read_helper(new_fd, &row, sizeof(row), connected)) {
+                if (read_helper(new_fd, &column, sizeof(column), connected)) {
                     int response;
                     if (option == 'R') {
                         response = search_tiles(&game, row - 'A', column - 1);
@@ -526,10 +514,12 @@ int play_minesweeper(int new_fd, int thread_id, int *client_connected) {
                         response = place_flag(&game, row - 'A', column - 1);
                     }
 
+                    // Send the server response so client can display a message
                     send(new_fd, &response, sizeof(response), 0);
-
+                    // Send game state with data only on revealed tiles
                     send_revealed_game(&game, new_fd);
 
+                    // Return from function on game end
                     if (response == GAME_WON || response == GAME_LOST) {
                         return response;
                     }
@@ -542,81 +532,210 @@ int play_minesweeper(int new_fd, int thread_id, int *client_connected) {
     return -1;
 }
 
+/*
+ * function send_revealed_game(): send game state with dataless unrevealed tiles
+ * algorithm: Loop through game state and if tile is revealed, send it. Send
+ *   a 'dummy' tile with no mine information for unrevealed tiles.
+ * input: pointer to GameState, socked file descriptor.
+ * output: none.
+ */
 void send_revealed_game(GameState *game, int new_fd) {
-    Tile unrevealed_tile;
-    unrevealed_tile.revealed = 0;
+    // Set up dummy tile
+    Tile dummy;
+    dummy.revealed = 0;
 
+    // Loop through all tiles in gamestate
     for (int row = 0; row < NUM_TILES_Y; row++) {
         for (int column = 0; column < NUM_TILES_X; column++) {
             Tile *tile = &game->tiles[row][column];
 
             if (tile->revealed) {
+                // Send proper tile as it has already been revealed
                 send(new_fd, tile, sizeof(Tile), 0);
             } else {
+                // Set flag status of dummy tile then send it
                 if (tile->flagged) {
-                    unrevealed_tile.flagged = 1;
+                    dummy.flagged = 1;
                 } else {
-                    unrevealed_tile.flagged = 0;
+                    dummy.flagged = 0;
                 }
-                send(new_fd, &unrevealed_tile, sizeof(Tile), 0);
+                send(new_fd, &dummy, sizeof(Tile), 0);
             }
         }
     }
+
+    // Send number of remaining mines in the game state to the client
     send(new_fd, &game->mines_left, sizeof(game->mines_left), 0);
 }
 
-Login *check_details(Login *head, char *usr, char *pwd) {
-    Login *curr_node = head;
-    while (curr_node->next != NULL) {
-        if (strcmp(curr_node->username, usr) == 0 &&
-            strcmp(curr_node->password, pwd) == 0) {
-            return curr_node;
-        }
-        curr_node = curr_node->next;
+/*
+ * function score_selection(): process the viewing of scoreboard
+ * algorithm: use mutexes to ensure that new scores are not added while
+ *   other clients are trying to read the scoreboard.
+ * input: socked file descriptor.
+ * output: none.
+ */
+void score_selection(int new_fd) {
+    // Lock writing if atleast one reader is present
+    pthread_mutex_lock(&read_mutex);
+    reader_count++;
+    if (reader_count == 1) {
+        pthread_mutex_lock(&write_mutex);
     }
-    return NULL;
+    pthread_mutex_unlock(&read_mutex);
+
+    send_highscore_data(new_fd);
+
+    // Unlock writer once no other threads are trying to read the scoreboard
+    pthread_mutex_lock(&read_mutex);
+    reader_count--;
+    if (reader_count == 0) {
+        pthread_mutex_unlock(&write_mutex);
+    }
+    pthread_mutex_unlock(&read_mutex);
 }
 
-Login *authenticate_access(int new_fd, Login *access_list, int thread_id,
-                           int *client_connected) {
-    char usr[MAX_READ_LENGTH];
-    char pwd[MAX_READ_LENGTH];
+/*
+ * function send_highscore_data(): send scoreboard data to client.
+ * algorithm: Loop through Score linked list, sending relevant data to client,
+ *   send a flag to indicate whether more scores will follow after the current
+ *   one.
+ * input: socket file descriptor
+ * output: none.
+ */
+void send_highscore_data(int new_fd) {
+    Score *node = score_head;
+    // Send whether list is empty or not to client, as different text rendered
+    int response_type;
+    if (node == NULL) {
+        response_type = HIGHSCORES_EMPTY;
+    } else {
+        response_type = HIGHSCORES_PRESENT;
+    }
+    send(new_fd, &response_type, sizeof(response_type), 0);
 
-    if (read_helper(new_fd, &usr, MAX_READ_LENGTH, client_connected)) {
-        if (read_helper(new_fd, &pwd, MAX_READ_LENGTH, client_connected)) {
-            Login *auth_login = check_details(access_list, usr, pwd);
-            int auth_val;
-            if (auth_login == NULL) {
-                auth_val = 0;
+    // Loop through the Score linked list
+    while (node != NULL) {
+        // Send username, duration, games won, and games played respectively
+        // Sent from longest to shortest duration (head to tail of list) as it
+        // will appear in the opposite order on the client console.
+        send(new_fd, node->user->username, sizeof(node->user->username), 0);
+        send(new_fd, &(node->duration), sizeof(node->duration), 0);
+        send(new_fd, &(node->user->games_won), sizeof(node->user->games_won),
+             0);
+        send(new_fd, &(node->user->games_played),
+             sizeof(node->user->games_played), 0);
+
+        // Send flag on if entries remain
+        int entries_left;
+        if (node->next == NULL) {
+            entries_left = HIGHSCORES_END;
+        } else {
+            entries_left = HIGHSCORES_PRESENT;
+        }
+        send(new_fd, &entries_left, sizeof(entries_left), 0);
+
+        node = node->next;
+    }
+}
+
+/*
+ * function insert_score(): insert new Score struct into the linked list
+ * algorithm: only accessed exclusively. Loop through current list till new
+ *   Score should be placed before 'node' (found through checks). Place node
+ *   after the 'prev' Score and link it to the next 'node'.
+ * input: pointer to new Score to be inserted.
+ * output: none.
+ */
+void insert_score(Score *new) {
+    Score *prev = NULL;
+    Score *node = score_head;
+    // Loop through
+    while (1) {
+        // Checks based on assignment criteria. Runs when 'new' should appear
+        // above 'node' on the highscore display
+        if (node == NULL || new->duration > node->duration ||
+            (new->duration == node->duration &&
+             new->user->games_won < node->user->games_won) ||
+            (new->duration == node->duration &&
+             new->user->games_won ==
+                 node->user->games_won &&strcmp(new->user->username,
+                                                node->user->username) < 0)) {
+            // If empty list, set head to the score
+            if (prev == NULL) {
+                score_head = new;
             } else {
-                auth_val = 1;
+                // Else set it after the previous node
+                prev->next = new;
             }
-            if (send(new_fd, &auth_val, sizeof(auth_val), 0) == -1) {
-                perror("Couldn't send authorisation.");
-            }
-            return auth_login;
+            // Link new score to the next nodee and return
+            new->next = node;
+            return;
         }
+        // Move along the list to find where new Score should be inserted
+        prev = node;
+        node = node->next;
     }
-
-    printf("Thread %d: Left login due to shutdown.\n", thread_id);
-    return NULL;
 }
 
+/*
+ * function read_helper(): provide non-blocking recv ability
+ * algorithm: Continously poll the file descriptor with select to see if there
+ *   is anything available to read, with a flag on shutdown and connection.
+ *   If data is available to read, read it into the provided buffer.
+ * input: socked file descriptor, pointer to buffer, length of buffer,
+ *   connected flag.
+ * output: none.
+ */
+int read_helper(int fd, void *buff, size_t len, int *connected) {
+    while (!shutdown_active && *connected) {
+        // Reset the file descriptor set to read from fd
+        fd_set init_select;
+        FD_ZERO(&init_select);
+        FD_SET(fd, &init_select);
+
+        // Set init_select with whether fd has data
+        if (select(fd + 1, &init_select, NULL, NULL, &tv) <= 0) {
+            continue;
+        };
+        // If fd was set, and data is available read it in
+        if (FD_ISSET(fd, &init_select)) {
+            if (recv(fd, buff, len, 0) <= 0) {
+                // On receive error, set flag that client is not connected
+                perror("Client ended connection");
+                *connected = 0;
+                continue;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * function clear_allocated_memory(): explicitly free all dynamic memory
+ * algorithm: loop through each stored linked list, freeing nodes each iteration
+ * input: none.
+ * output: none.
+ */
 void clear_allocated_memory() {
-    while (best != NULL) {
-        Score *next = best->next;
-        free(best);
-        best = next;
+    // Free scoreboard elements
+    while (score_head != NULL) {
+        Score *next = score_head->next;
+        free(score_head);
+        score_head = next;
     }
-    while (head != NULL) {
-        Login *next = head->next;
-        free(head);
-        head = next;
+    // Free read in verified login details
+    while (login_head != NULL) {
+        Login *next = login_head->next;
+        free(login_head);
+        login_head = next;
     }
-    while (requests != NULL) {
-        Request *next = requests->next;
-        close(requests->new_fd);
-        free(requests);
-        requests = next;
+    // Free any requests from clients still pending
+    while (request_head != NULL) {
+        Request *next = request_head->next;
+        close(request_head->new_fd);
+        free(request_head);
+        request_head = next;
     }
 }
