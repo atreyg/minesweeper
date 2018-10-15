@@ -495,7 +495,7 @@ int play_minesweeper(int new_fd, int thread_id, int *connected) {
     char row, option;
     int column;
     // Loop till shutdown or disconnect
-    while (!shutdown_active && connected) {
+    while (!shutdown_active && *connected) {
         // Reads are nested to ensure data is received in order
         if (read_helper(new_fd, &option, sizeof(option), connected)) {
             // Leave loop on quit
