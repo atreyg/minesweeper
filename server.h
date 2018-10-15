@@ -36,3 +36,4 @@ void send_highscore_data(int new_fd);
 void insert_score(Score *new);
 int read_helper(int fd, void *buff, size_t len, int *client_connected);
 void clear_allocated_memory();
+void send_helper(int new_fd, void *buffer, size_t len);
