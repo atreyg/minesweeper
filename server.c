@@ -374,19 +374,19 @@ void handle_request(Request *a_request, int thread_id) {
     Login *curr_login = auth_access(new_fd, thread_id, &connected);
 
     if (curr_login != NULL) {
-        int selection;
+        char selection;
 
         // Loop until shutdown or client disconnect
         while (!shutdown_active && connected) {
             if (read_helper(new_fd, &selection, sizeof(selection),
                             &connected)) {
                 // Call appropriate function from client selection
-                if (selection == 1) {
+                if (selection == '1') {
                     minesweeper_selection(new_fd, thread_id, &connected,
                                           curr_login);
-                } else if (selection == 2) {
+                } else if (selection == '2') {
                     score_selection(new_fd);
-                } else if (selection == 3) {
+                } else if (selection == '3') {
                     // Leave loop on client quit
                     break;
                 }

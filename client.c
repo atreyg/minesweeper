@@ -193,13 +193,13 @@ void read_login_input(char *buffer) {
 void core_loop(int sockfd) {
     while (1) {
         // User selection in the primary menu
-        int selection = select_client_action(sockfd);
+        char selection = select_client_action(sockfd);
 
-        if (selection == 1) {
+        if (selection == '1') {
             play_minesweeper(sockfd);
-        } else if (selection == 2) {
+        } else if (selection == '2') {
             show_leaderboard(sockfd);
-        } else if (selection == 3) {
+        } else if (selection == '3') {
             // Leave the infinite loop and return to main on 'Quit'
             break;
         }
@@ -224,13 +224,14 @@ int select_client_action(int sockfd) {
 
     // Ask client to select one of the provided options until correct input is
     // provided.
-    int selection;
+    char selection;
     do {
         printf("\nSelection option (1-3): ");
-        scanf("%d", &selection);
+        scanf(" %c", &selection);
+        printf("%c\n", selection);
         // Remove remnants in input buffer to avoid incorrect processing
         clear_buffer();
-    } while (selection < 1 || selection > 3);
+    } while (selection != '1' && selection != '2' && selection != '3');
 
     // Send selected option to server
     if (send(sockfd, &selection, sizeof(selection), 0) == -1) {
