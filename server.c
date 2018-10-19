@@ -119,6 +119,11 @@ int main(int argc, char *argv[]) {
     printf("Main thread: Unblocking all threads waiting on request.\n");
     pthread_cond_broadcast(&got_request);
 
+    // Clean up handler threads after they exit
+    for (int i = 0; i < NUM_HANDLER_THREADS; i++) {
+        pthread_join(p_threads[i], NULL);
+    }
+
     printf("Main thread: Cleared data, exiting.\n");
     pthread_exit(0);
 
@@ -724,6 +729,32 @@ void send_helper(int new_fd, void *buffer, size_t len) {
         perror("Couldn't send data.");
     }
 }
+
+// int recv_int(int fd, int val) {
+//     val = htonl(val);
+//     send(fd, &val, sizeof(val), 0);
+// }
+
+// int recv_int(int fd) {
+//     int val;
+//     recv(fd, &val, sizeof(val), 0);
+//     return ntohl(val);
+// }
+
+// void sent_string(int fd, const char *str) {
+//     int length - strlen(str);
+//     send_int(fd, lenght);
+//     send(fd, str, length, 0);
+// }
+
+// char *recv_string(intr fd) {
+//     int length = recv_int(fd);
+//     char *str = malloc(length + 1);
+//     recv(fd, str, length, 0);
+
+//     str[length] = 0;
+//     return str;
+// }
 
 /*
  * function clear_allocated_memory(): explicitly free all dynamic memory
