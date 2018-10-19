@@ -12,4 +12,6 @@ void get_and_send_tile_coordinates(int sockfd);
 void print_response_output(int response, int sockfd);
 void show_leaderboard();
 void print_leaderboard_contents(int response, int sockfd);
+void read_helper(int fd, void *buff, size_t len);
+void send_helper(int new_fd, void *buffer, size_t len);
 void clear_buffer();

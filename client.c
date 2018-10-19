@@ -103,7 +103,7 @@ void wait_for_thread(int sockfd) {
     int connection_available;
     printf("Waiting for open connection...\n");
     // Call that blocks processing till trigger sent by server
-    recv(sockfd, &connection_available, sizeof(connection_available), 0);
+    read_helper(sockfd, &connection_available, sizeof(connection_available));
     printf("Received connection.\n");
 }
 
@@ -137,9 +137,7 @@ int login(int sockfd) {
 
     // Receive authentication response from server
     int val;
-    if (recv(sockfd, &val, sizeof(val), 0) == -1) {
-        perror("Couldn't receive authentication.");
-    }
+    read_helper(sockfd, &val, sizeof(val));
     return val;
 }
 
@@ -269,7 +267,7 @@ void play_minesweeper(int sockfd) {
 
         // Get server response based on selected option and tile chosen
         int response;
-        recv(sockfd, &response, sizeof(response), 0);
+        read_helper(sockfd, &response, sizeof(response));
 
         // Update the game board and show any text response provided by server
         update_game_state(&game, sockfd);
@@ -292,10 +290,10 @@ void play_minesweeper(int sockfd) {
 void update_game_state(GameState *game, int sockfd) {
     for (int row = 0; row < NUM_TILES_Y; row++) {
         for (int column = 0; column < NUM_TILES_X; column++) {
-            recv(sockfd, &game->tiles[row][column], sizeof(Tile), 0);
+            read_helper(sockfd, &game->tiles[row][column], sizeof(Tile));
         }
     }
-    recv(sockfd, &game->mines_left, sizeof(game->mines_left), 0);
+    read_helper(sockfd, &game->mines_left, sizeof(game->mines_left));
     print_game_state(game);
 }
 
@@ -357,7 +355,7 @@ void print_response_output(int response, int sockfd) {
     } else if (response == GAME_WON) {
         // If game is won, the time taken to win is also sent and displayed
         time_t win_time;
-        recv(sockfd, &win_time, sizeof(win_time), 0);
+        read_helper(sockfd, &win_time, sizeof(win_time));
         printf(
             "Congratulations! You have located all the mines.\n"
             "You won in %d seconds!\n",
@@ -391,7 +389,7 @@ void show_leaderboard(int sockfd) {
 
     // Get response of showing leaderboard from server and print
     int response;
-    recv(sockfd, &response, sizeof(response), 0);
+    read_helper(sockfd, &response, sizeof(response));
     print_leaderboard_contents(response, sockfd);
 
     printf("\n%s\n", border);
@@ -418,10 +416,10 @@ void print_leaderboard_contents(int response, int sockfd) {
             int games_won;
             int games_played;
 
-            recv(sockfd, username, sizeof(username), 0);
-            recv(sockfd, &duration, sizeof(duration), 0);
-            recv(sockfd, &games_won, sizeof(games_won), 0);
-            recv(sockfd, &games_played, sizeof(games_played), 0);
+            read_helper(sockfd, username, sizeof(username));
+            read_helper(sockfd, &duration, sizeof(duration));
+            read_helper(sockfd, &games_won, sizeof(games_won));
+            read_helper(sockfd, &games_played, sizeof(games_played));
 
             // Print data in provided format
             printf("%s \t %ld seconds \t %d games won, %d games played\n",
@@ -429,12 +427,38 @@ void print_leaderboard_contents(int response, int sockfd) {
 
             // Receive flag on whether more scores are to follow
             int entry_left;
-            recv(sockfd, &entry_left, sizeof(entry_left), 0);
+            read_helper(sockfd, &entry_left, sizeof(entry_left));
             // If no entries remaining, exit loop and return to main menu
             if (entry_left == HIGHSCORES_END) {
                 break;
             }
         }
+    }
+}
+
+/*
+ * function read_helper(): helper function to read data from server
+ * algorithm: read the data from file descriptor, read in to buffer, for a
+ *   specified length, and check for error
+ * input: none.
+ * output: none.
+ */
+void read_helper(int new_fd, void *buffer, size_t len) {
+    if (recv(new_fd, buffer, len, 0) == -1) {
+        perror("Couldn't receive data.");
+    }
+}
+
+/*
+ * function send_helper(): helper function to send data to server
+ * algorithm: send the data to file descriptor, read in from buffer, for a
+ *   specified length, and check for error
+ * input: none.
+ * output: none.
+ */
+void send_helper(int new_fd, void *buffer, size_t len) {
+    if (send(new_fd, buffer, len, 0) == -1) {
+        perror("Couldn't send data.");
     }
 }
 

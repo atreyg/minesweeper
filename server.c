@@ -157,7 +157,7 @@ int setup_server_connection(int port_no) {
 
     // Allow port to be reused
     int yes = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) == -1) {
         perror("reuse addr");
         exit(1);
     }
@@ -711,6 +711,19 @@ int read_helper(int fd, void *buff, size_t len, int *connected) {
 }
 
 /*
+ * function send_helper(): helper function to send data to client
+ * algorithm: send the data to file descriptor, read in from buffer, for a
+ *   specified length, and check for error
+ * input: none.
+ * output: none.
+ */
+void send_helper(int new_fd, void *buffer, size_t len) {
+    if (send(new_fd, buffer, len, 0) == -1) {
+        perror("Couldn't send data.");
+    }
+}
+
+/*
  * function clear_allocated_memory(): explicitly free all dynamic memory
  * algorithm: loop through each stored linked list, freeing nodes each iteration
  * input: none.
@@ -735,18 +748,5 @@ void clear_allocated_memory() {
         close(request_head->new_fd);
         free(request_head);
         request_head = next;
-    }
-}
-
-/*
- * function send_helper(): helper function to send data to client
- * algorithm: send the data to file descriptor, read in to buffer, for a
- *   specified length, and check for error
- * input: none.
- * output: none.
- */
-void send_helper(int new_fd, void *buffer, size_t len) {
-    if (send(new_fd, buffer, len, 0) == -1) {
-        perror("Couldn't send data.");
     }
 }
