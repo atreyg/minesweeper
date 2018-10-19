@@ -230,7 +230,9 @@ void setup_login_information() {
     // Close file
     fclose(login_file);
     // Throwing away the first entry that contains column headers from file
-    login_head = login_head->next;
+    Login *temp = login_head->next;
+    free(login_head);
+    login_head = temp;
 }
 
 /*
