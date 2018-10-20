@@ -8,7 +8,7 @@ typedef struct logins_t {
 
 typedef struct score_entry_t {
     Login *user;
-    time_t duration;
+    int duration;
     struct score_entry_t *next;
 } Score;
 
@@ -35,5 +35,7 @@ void score_selection(int new_fd);
 void send_highscore_data(int new_fd);
 void insert_score(Score *new);
 int read_helper(int fd, void *buff, size_t len, int *client_connected);
-void send_helper(int new_fd, void *buffer, size_t len);
+void send_int(int fd, int val);
+void send_string(int fd, char *str);
+void send_tile(int fd, Tile *tile);
 void clear_allocated_memory();

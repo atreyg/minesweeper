@@ -100,10 +100,9 @@ int setup_client_connection(char *host_arg, char *port_arg) {
  * output: none.
  */
 void wait_for_thread(int sockfd) {
-    int connection_available;
     printf("Waiting for open connection...\n");
     // Call that blocks processing till trigger sent by server
-    read_helper(sockfd, &connection_available, sizeof(connection_available));
+    recv_int(sockfd);
     printf("Received connection.\n");
 }
 
@@ -128,16 +127,11 @@ int login(int sockfd) {
     read_login_input(pwd);
 
     // Send username and password to server
-    if (send(sockfd, usr, sizeof(usr), 0) == -1) {
-        perror("Could not send username.");
-    }
-    if (send(sockfd, pwd, sizeof(pwd), 0) == -1) {
-        perror("Could not send password.");
-    }
+    send_string(sockfd, usr);
+    send_string(sockfd, pwd);
 
     // Receive authentication response from server
-    int val;
-    read_helper(sockfd, &val, sizeof(val));
+    int val = recv_int(sockfd);
     return val;
 }
 
@@ -226,7 +220,6 @@ int select_client_action(int sockfd) {
     do {
         printf("\nSelection option (1-3): ");
         scanf(" %c", &selection);
-        printf("%c\n", selection);
         // Remove remnants in input buffer to avoid incorrect processing
         clear_buffer();
     } while (selection != '1' && selection != '2' && selection != '3');
@@ -266,8 +259,7 @@ void play_minesweeper(int sockfd) {
         get_and_send_tile_coordinates(sockfd);
 
         // Get server response based on selected option and tile chosen
-        int response;
-        read_helper(sockfd, &response, sizeof(response));
+        int response = recv_int(sockfd);
 
         // Update the game board and show any text response provided by server
         update_game_state(&game, sockfd);
@@ -290,10 +282,11 @@ void play_minesweeper(int sockfd) {
 void update_game_state(GameState *game, int sockfd) {
     for (int row = 0; row < NUM_TILES_Y; row++) {
         for (int column = 0; column < NUM_TILES_X; column++) {
-            read_helper(sockfd, &game->tiles[row][column], sizeof(Tile));
+            Tile *tile = &game->tiles[row][column];
+            recv_tile(sockfd, tile);
         }
     }
-    read_helper(sockfd, &game->mines_left, sizeof(game->mines_left));
+    game->mines_left = recv_int(sockfd);
     print_game_state(game);
 }
 
@@ -330,10 +323,9 @@ char select_game_action() {
  */
 void get_and_send_tile_coordinates(int sockfd) {
     // Get input from client
-    char row;
-    int column;
+    char row, column;
     printf("Please input a coordinate: ");
-    scanf(" %c%d", &row, &column);
+    scanf(" %c%c", &row, &column);
     clear_buffer();
 
     // Send to server
@@ -354,12 +346,11 @@ void print_response_output(int response, int sockfd) {
         printf("You lost!\n");
     } else if (response == GAME_WON) {
         // If game is won, the time taken to win is also sent and displayed
-        time_t win_time;
-        read_helper(sockfd, &win_time, sizeof(win_time));
+        int win_time = recv_int(sockfd);
         printf(
             "Congratulations! You have located all the mines.\n"
             "You won in %d seconds!\n",
-            (int)win_time);
+            win_time);
     } else if (response == NO_MINE_AT_FLAG) {
         printf("There was no mine at flag!\n");
     } else if (response == TILE_ALREADY_REVEALED) {
@@ -388,8 +379,7 @@ void show_leaderboard(int sockfd) {
     printf("\n%s\n", border);
 
     // Get response of showing leaderboard from server and print
-    int response;
-    read_helper(sockfd, &response, sizeof(response));
+    int response = recv_int(sockfd);
     print_leaderboard_contents(response, sockfd);
 
     printf("\n%s\n", border);
@@ -411,23 +401,20 @@ void print_leaderboard_contents(int response, int sockfd) {
     } else {
         while (1) {
             // Receive required details from server
-            char username[MAX_READ_LENGTH];
-            long int duration;
-            int games_won;
-            int games_played;
-
-            read_helper(sockfd, username, sizeof(username));
-            read_helper(sockfd, &duration, sizeof(duration));
-            read_helper(sockfd, &games_won, sizeof(games_won));
-            read_helper(sockfd, &games_played, sizeof(games_played));
+            char *username = recv_string(sockfd);
+            int duration = recv_int(sockfd);
+            int games_won = recv_int(sockfd);
+            int games_played = recv_int(sockfd);
 
             // Print data in provided format
-            printf("%s \t %ld seconds \t %d games won, %d games played\n",
+            printf("%s \t %d seconds \t %d games won, %d games played\n",
                    username, duration, games_won, games_played);
 
+            // Free memory from string after printing;
+            free(username);
+
             // Receive flag on whether more scores are to follow
-            int entry_left;
-            read_helper(sockfd, &entry_left, sizeof(entry_left));
+            int entry_left = recv_int(sockfd);
             // If no entries remaining, exit loop and return to main menu
             if (entry_left == HIGHSCORES_END) {
                 break;
@@ -437,31 +424,67 @@ void print_leaderboard_contents(int response, int sockfd) {
 }
 
 /*
- * function read_helper(): helper function to read data from server
+ * function recv_int(): helper function to read int from server
  * algorithm: read the data from file descriptor, read in to buffer, for a
  *   specified length, and check for error
- * input: none.
- * output: none.
+ * input: socket file descriptor.
+ * output: received int.
  */
-void read_helper(int new_fd, void *buffer, size_t len) {
-    if (recv(new_fd, buffer, len, 0) == -1) {
-        perror("Couldn't receive data.");
+int recv_int(int fd) {
+    int val;
+    if (recv(fd, &val, sizeof(val), 0) == -1) {
+        perror("Couldn't receive int data.");
+        printf("Error receiving data from server. Exiting.\n");
+        exit(0);
     }
+    return ntohl(val);
 }
 
 /*
- * function send_helper(): helper function to send data to server
- * algorithm: send the data to file descriptor, read in from buffer, for a
- *   specified length, and check for error
+ * function recv_string(): helper function to read string from server
+ * algorithm: read the data from file descriptor, read in to memory of specified
+ *   length, and check for error
+ * input: socket file descriptor.
+ * output: received string.
+ */
+char *recv_string(int fd) {
+    char *str = malloc(MAX_READ_LENGTH);
+
+    if (recv(fd, str, MAX_READ_LENGTH, 0) == -1) {
+        perror("Couldn't receive string data.");
+        printf("Error receiving data from server. Exiting.\n");
+        exit(0);
+    };
+
+    return str;
+}
+
+/*
+ * function recv_tile(): helper function to read tile components from server
+ * algorithm: read all tile components from file descriptor, and store them in
+ *   tile passed into function.
+ * input: socket file descriptor, pointer to file.
+ * output: none.
+ */
+void recv_tile(int fd, Tile *tile) {
+    tile->adjacent_mines = recv_int(fd);
+    tile->revealed = recv_int(fd);
+    tile->is_mine = recv_int(fd);
+    tile->flagged = recv_int(fd);
+}
+
+/*
+ * function send_string(): helper function to send string data to server
+ * algorithm: send the length of the string to file descriptor, followed by the
+ *   actual character information.
  * input: none.
  * output: none.
  */
-void send_helper(int new_fd, void *buffer, size_t len) {
-    if (send(new_fd, buffer, len, 0) == -1) {
-        perror("Couldn't send data.");
-    }
+void send_string(int fd, char *str) {
+    if (send(fd, str, MAX_READ_LENGTH, 0) == -1) {
+        perror("Couldn't send string data.");
+    };
 }
-
 /*
  * function clear_buffer: Remove any remaining data on stdin
  * algorithm: Loop and discard each remaining character till a new line or

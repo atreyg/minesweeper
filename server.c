@@ -162,7 +162,7 @@ int setup_server_connection(int port_no) {
 
     // Allow port to be reused
     int yes = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) == -1) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
         perror("reuse addr");
         exit(1);
     }
@@ -374,7 +374,7 @@ void handle_request(Request *a_request, int thread_id) {
 
     // Unblock client that is waiting to be handled
     int connected = 1;
-    send_helper(new_fd, &connected, sizeof(connected));
+    send_int(new_fd, connected);
     printf("Thread %d: Handling new game.\n", thread_id);
 
     // Get user login information or NULL if not authenticated,
@@ -438,7 +438,7 @@ Login *auth_access(int new_fd, int thread_id, int *connected) {
                 curr_node = curr_node->next;
             }
             // Send whether authentication was successful to client
-            send_helper(new_fd, &auth_val, sizeof(auth_val));
+            send_int(new_fd, auth_val);
 
             return auth_login;
         }
@@ -473,10 +473,10 @@ void minesweeper_selection(int new_fd, int thread_id, int *connected,
         // Create a score struct with user and duration data
         Score *score = malloc(sizeof(Score));
         score->user = login;
-        score->duration = end - start;
+        score->duration = (int)(end - start);
 
         // Send duration to client so player can view
-        send_helper(new_fd, &(score->duration), sizeof(score->duration));
+        send_int(new_fd, score->duration);
 
         // Mutexes to exclusively add a score to the list
         pthread_mutex_lock(&write_mutex);
@@ -499,8 +499,8 @@ int play_minesweeper(int new_fd, int thread_id, int *connected) {
     initialise_game(&game);
     send_revealed_game(&game, new_fd);
 
-    char row, option;
-    int column;
+    char option;
+    char row, column;
     // Loop till shutdown or disconnect
     while (!shutdown_active && *connected) {
         // Reads are nested to ensure data is received in order
@@ -514,13 +514,13 @@ int play_minesweeper(int new_fd, int thread_id, int *connected) {
                 if (read_helper(new_fd, &column, sizeof(column), connected)) {
                     int response;
                     if (option == 'R') {
-                        response = search_tiles(&game, row - 'A', column - 1);
+                        response = search_tiles(&game, row - 'A', column - '1');
                     } else if (option == 'P') {
-                        response = place_flag(&game, row - 'A', column - 1);
+                        response = place_flag(&game, row - 'A', column - '1');
                     }
 
                     // Send the server response so client can display a message
-                    send_helper(new_fd, &response, sizeof(response));
+                    send_int(new_fd, response);
                     // Send game state with data only on revealed tiles
                     send_revealed_game(&game, new_fd);
 
@@ -556,7 +556,7 @@ void send_revealed_game(GameState *game, int new_fd) {
 
             if (tile->revealed) {
                 // Send proper tile as it has already been revealed
-                send_helper(new_fd, tile, sizeof(Tile));
+                send_tile(new_fd, tile);
             } else {
                 // Set flag status of dummy tile then send it
                 if (tile->flagged) {
@@ -564,13 +564,13 @@ void send_revealed_game(GameState *game, int new_fd) {
                 } else {
                     dummy.flagged = 0;
                 }
-                send_helper(new_fd, &dummy, sizeof(Tile));
+                send_tile(new_fd, &dummy);
             }
         }
     }
 
     // Send number of remaining mines in the game state to the client
-    send_helper(new_fd, &game->mines_left, sizeof(game->mines_left));
+    send_int(new_fd, game->mines_left);
 }
 
 /*
@@ -617,19 +617,17 @@ void send_highscore_data(int new_fd) {
     } else {
         response_type = HIGHSCORES_PRESENT;
     }
-    send_helper(new_fd, &response_type, sizeof(response_type));
+    send_int(new_fd, response_type);
 
     // Loop through the Score linked list
     while (node != NULL) {
         // Send username, duration, games won, and games played respectively
         // Sent from longest to shortest duration (head to tail of list) as it
         // will appear in the opposite order on the client console.
-        send_helper(new_fd, node->user->username, sizeof(node->user->username));
-        send_helper(new_fd, &(node->duration), sizeof(node->duration));
-        send_helper(new_fd, &(node->user->games_won),
-                    sizeof(node->user->games_won));
-        send_helper(new_fd, &(node->user->games_played),
-                    sizeof(node->user->games_played));
+        send_string(new_fd, node->user->username);
+        send_int(new_fd, node->duration);
+        send_int(new_fd, node->user->games_won);
+        send_int(new_fd, node->user->games_played);
 
         // Send flag on if entries remain
         int entries_left;
@@ -638,7 +636,7 @@ void send_highscore_data(int new_fd) {
         } else {
             entries_left = HIGHSCORES_PRESENT;
         }
-        send_helper(new_fd, &entries_left, sizeof(entries_left));
+        send_int(new_fd, entries_left);
 
         node = node->next;
     }
@@ -688,6 +686,8 @@ void insert_score(Score *new) {
  * algorithm: Continously poll the file descriptor with select to see if there
  *   is anything available to read, with a flag on shutdown and connection.
  *   If data is available to read, read it into the provided buffer.
+ *   Note: as only character values are read, no requirement to convert byte
+ *   order.
  * input: socked file descriptor, pointer to buffer, length of buffer,
  *   connected flag.
  * output: none.
@@ -718,43 +718,45 @@ int read_helper(int fd, void *buff, size_t len, int *connected) {
 }
 
 /*
- * function send_helper(): helper function to send data to client
- * algorithm: send the data to file descriptor, read in from buffer, for a
- *   specified length, and check for error
+ * function send_int(): helper function to send int data to client
+ * algorithm: convert byte order to network long and then send the data
+ *   to file descriptor, checking for errors
  * input: none.
  * output: none.
  */
-void send_helper(int new_fd, void *buffer, size_t len) {
-    if (send(new_fd, buffer, len, 0) == -1) {
-        perror("Couldn't send data.");
+void send_int(int fd, int val) {
+    val = htonl(val);
+    if (send(fd, &val, sizeof(val), 0) == -1) {
+        perror("Couldn't send int data.");
     }
 }
 
-// int recv_int(int fd, int val) {
-//     val = htonl(val);
-//     send(fd, &val, sizeof(val), 0);
-// }
+/*
+ * function send_string(): helper function to send string data to client
+ * algorithm: send the length of the string to file descriptor, followed by the
+ *   actual character information.
+ * input: none.
+ * output: none.
+ */
+void send_string(int fd, char *str) {
+    if (send(fd, str, MAX_READ_LENGTH, 0) == -1) {
+        perror("Couldn't send string data.");
+    };
+}
 
-// int recv_int(int fd) {
-//     int val;
-//     recv(fd, &val, sizeof(val), 0);
-//     return ntohl(val);
-// }
-
-// void sent_string(int fd, const char *str) {
-//     int length - strlen(str);
-//     send_int(fd, lenght);
-//     send(fd, str, length, 0);
-// }
-
-// char *recv_string(intr fd) {
-//     int length = recv_int(fd);
-//     char *str = malloc(length + 1);
-//     recv(fd, str, length, 0);
-
-//     str[length] = 0;
-//     return str;
-// }
+/*
+ * function send_tile(): helper function to send tiles to client
+ * algorithm: send all individual components of the tile, as integers,
+ *   to be received by the client.
+ * input: none.
+ * output: none.
+ */
+void send_tile(int fd, Tile *tile) {
+    send_int(fd, tile->adjacent_mines);
+    send_int(fd, (int)tile->revealed);
+    send_int(fd, (int)tile->is_mine);
+    send_int(fd, (int)tile->flagged);
+}
 
 /*
  * function clear_allocated_memory(): explicitly free all dynamic memory
